@@ -22,6 +22,7 @@ interface SelectedFile {
   type: string;
   progress: number;
   status: "idle" | "uploading" | "success" | "error";
+  savedName?: string;
 }
 
 interface RecentUpload {
@@ -32,11 +33,24 @@ interface RecentUpload {
   type: string;
 }
 
+interface AnalysisResult {
+  caption: string;
+  objects_detected: string[];
+  ocr_text: string;
+  confidence: number;
+  filename: string;
+}
+
 export default function WorkspacePage() {
   const [isDragActive, setIsDragActive] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<SelectedFile[]>([]);
   const [recentUploads, setRecentUploads] = useState<RecentUpload[]>([]);
   const [previewImage, setPreviewImage] = useState<RecentUpload | null>(null);
+  
+  // New modular states for visual AI analysis
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
+  
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isUploading = selectedFiles.some((f) => f.status === "uploading");
@@ -83,10 +97,9 @@ export default function WorkspacePage() {
           const fileUrl = `${backendRootUrl}/${res.path}`;
 
           setSelectedFiles((prev) =>
-            prev.map((f) => (f.id === fileObj.id ? { ...f, status: "success", progress: 100 } : f))
+            prev.map((f) => (f.id === fileObj.id ? { ...f, status: "success", progress: 100, savedName: res.filename } : f))
           );
 
-          // Prepend to recent uploads and retain only top 10
           const newUpload: RecentUpload = {
             id: res.filename || Math.random().toString(36).substring(2, 9),
             name: res.original_name || fileObj.file.name,
@@ -119,6 +132,37 @@ export default function WorkspacePage() {
 
     xhr.open("POST", url, true);
     xhr.send(formData);
+  };
+
+  const triggerAnalysis = async (savedName: string, originalName: string) => {
+    setAnalysisLoading(true);
+    setAnalysisResult(null);
+    try {
+      const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+      const response = await fetch(`${apiBaseUrl}/analyze/image`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ filename: savedName }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setAnalysisResult({
+          caption: data.caption,
+          objects_detected: data.objects_detected,
+          ocr_text: data.ocr_text,
+          confidence: data.confidence,
+          filename: originalName
+        });
+      } else {
+        alert("Failed to analyze image file. Please verify model service status.");
+      }
+    } catch {
+      alert("Error contacting the vision analysis service.");
+    } finally {
+      setAnalysisLoading(false);
+    }
   };
 
   const handleFilesAdded = (files: File[]) => {
@@ -342,9 +386,23 @@ export default function WorkspacePage() {
                           </div>
                         )}
                         {file.status === "success" && (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                            Uploaded
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                              Uploaded
+                            </span>
+                            {file.type.startsWith("image/") && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  triggerAnalysis(file.savedName || file.name, file.name);
+                                }}
+                                disabled={analysisLoading}
+                                className="px-2 py-0.5 rounded-md bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white text-[9px] font-bold shadow-sm transition-all transform active:scale-95 cursor-pointer disabled:cursor-not-allowed"
+                              >
+                                Analyze
+                              </button>
+                            )}
+                          </div>
                         )}
                         {file.status === "error" && (
                           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-semibold bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20">
@@ -397,72 +455,146 @@ export default function WorkspacePage() {
 
         </div>
 
-        {/* Right Column: Recent Uploads panel */}
-        <motion.div
-          initial={{ opacity: 0, x: 20 }}
-          animate={{ opacity: 1, x: 0 }}
-          transition={{ duration: 0.5, delay: 0.3 }}
-          className="space-y-4"
-        >
-          <h2 className="text-sm font-bold tracking-tight">Recent Uploads</h2>
+        {/* Right Column: Recent Uploads & Analysis Panel */}
+        <div className="space-y-8">
           
-          {recentUploads.length > 0 ? (
-            <div className="space-y-3">
-              {recentUploads.map((upload) => (
-                <div
-                  key={upload.id}
-                  onClick={() => {
-                    if (upload.type.startsWith("image/")) {
-                      setPreviewImage(upload);
-                    }
-                  }}
-                  className={`flex items-center gap-3 p-3 rounded-2xl border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 shadow-sm transition-all ${
-                    upload.type.startsWith("image/") 
-                      ? "cursor-pointer hover:border-violet-500/30 hover:bg-slate-100/50 dark:hover:bg-zinc-900/40" 
-                      : ""
-                  }`}
-                >
-                  {/* Thumbnail / Icon wrapper */}
-                  <div className="h-12 w-12 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-100 dark:border-zinc-800 overflow-hidden flex items-center justify-center shrink-0">
-                    {upload.type.startsWith("image/") ? (
-                      <img 
-                        src={upload.url} 
-                        alt={upload.name} 
-                        className="h-full w-full object-cover"
-                        onError={(e) => {
-                          (e.target as HTMLElement).style.display = 'none';
-                        }}
-                      />
-                    ) : (
-                      React.createElement(getFileIcon(upload.type), { className: "h-5 w-5 text-slate-400" })
-                    )}
-                  </div>
-                  
-                  {/* Metadata */}
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs font-semibold text-slate-700 dark:text-zinc-200 truncate">{upload.name}</p>
-                    <p className="text-[9px] text-slate-400 dark:text-zinc-500">{upload.uploadTime}</p>
-                  </div>
+          {/* Analysis Results Display */}
+          {(analysisLoading || analysisResult) && (
+            <motion.div
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 rounded-3xl p-6 shadow-sm space-y-4"
+            >
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-zinc-800/50">
+                <h2 className="text-xs font-bold tracking-tight uppercase text-slate-500 dark:text-zinc-400">Analysis Results</h2>
+                {analysisResult && (
+                  <button
+                    onClick={() => setAnalysisResult(null)}
+                    className="text-slate-400 hover:text-slate-650 dark:hover:text-zinc-200 cursor-pointer"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+
+              {analysisLoading ? (
+                <div className="flex flex-col items-center justify-center py-10 space-y-3">
+                  <div className="h-8 w-8 animate-spin rounded-full border-2 border-violet-500 border-t-transparent" />
+                  <p className="text-[11px] text-slate-400 dark:text-zinc-500">AI Model reasoning in progress...</p>
                 </div>
-              ))}
-            </div>
-          ) : (
-            /* 3. Empty Recent Uploads section */
-            <div className="border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 rounded-3xl p-8 flex flex-col items-center justify-center text-center min-h-[300px] shadow-sm">
-              <div className="space-y-4 flex flex-col items-center">
-                <div className="h-12 w-12 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-100 dark:border-zinc-800 flex items-center justify-center text-slate-400 shadow-sm">
-                  <FolderOpen className="h-5 w-5" />
-                </div>
-                <div className="space-y-1">
-                  <h4 className="text-xs font-semibold">No uploaded files yet</h4>
-                  <p className="text-[10px] text-slate-400 dark:text-zinc-500 max-w-[200px] leading-relaxed">
-                    Files you upload in the workspace session will appear here for processing.
-                  </p>
+              ) : (
+                analysisResult && (
+                  <div className="space-y-4 text-xs">
+                    <div>
+                      <p className="text-[10px] text-slate-400 dark:text-zinc-500 uppercase tracking-wider font-semibold">Source File</p>
+                      <p className="font-semibold mt-0.5 text-slate-700 dark:text-zinc-200 truncate">{analysisResult.filename}</p>
+                    </div>
+
+                    <div>
+                      <p className="text-[10px] text-slate-400 dark:text-zinc-500 uppercase tracking-wider font-semibold">Visual Caption</p>
+                      <p className="mt-1 leading-relaxed text-slate-600 dark:text-zinc-300 bg-slate-50/50 dark:bg-zinc-950/40 p-2.5 rounded-xl border border-slate-100 dark:border-zinc-850/50">
+                        {analysisResult.caption}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-[10px] text-slate-400 dark:text-zinc-500 uppercase tracking-wider font-semibold mb-1.5">Objects Detected</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {analysisResult.objects_detected.map((obj, i) => (
+                          <span
+                            key={i}
+                            className="px-2 py-0.5 rounded-md bg-violet-500/10 text-violet-650 dark:text-violet-400 border border-violet-500/20 text-[10px] font-medium animate-fade-in"
+                          >
+                            {obj}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="text-[10px] text-slate-400 dark:text-zinc-500 uppercase tracking-wider font-semibold">Extracted OCR Text</p>
+                      <p className="mt-1 leading-relaxed font-mono text-[10px] text-slate-600 dark:text-zinc-300 bg-slate-50/50 dark:bg-zinc-950/40 p-2.5 rounded-xl border border-slate-100 dark:border-zinc-850/50 break-words">
+                        {analysisResult.ocr_text}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-zinc-850/50">
+                      <span className="text-slate-400">Confidence Metric</span>
+                      <span className="font-semibold text-emerald-500">{(analysisResult.confidence * 100).toFixed(1)}%</span>
+                    </div>
+                  </div>
+                )
+              )}
+            </motion.div>
+          )}
+
+          {/* Recent Uploads Section */}
+          <motion.div
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.5, delay: 0.3 }}
+            className="space-y-4"
+          >
+            <h2 className="text-sm font-bold tracking-tight">Recent Uploads</h2>
+            
+            {recentUploads.length > 0 ? (
+              <div className="space-y-3">
+                {recentUploads.map((upload) => (
+                  <div
+                    key={upload.id}
+                    onClick={() => {
+                      if (upload.type.startsWith("image/")) {
+                        setPreviewImage(upload);
+                      }
+                    }}
+                    className={`flex items-center gap-3 p-3 rounded-2xl border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 shadow-sm transition-all ${
+                      upload.type.startsWith("image/") 
+                        ? "cursor-pointer hover:border-violet-500/30 hover:bg-slate-100/50 dark:hover:bg-zinc-900/40" 
+                        : ""
+                    }`}
+                  >
+                    {/* Thumbnail / Icon wrapper */}
+                    <div className="h-12 w-12 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-100 dark:border-zinc-800 overflow-hidden flex items-center justify-center shrink-0">
+                      {upload.type.startsWith("image/") ? (
+                        <img 
+                          src={upload.url} 
+                          alt={upload.name} 
+                          className="h-full w-full object-cover"
+                          onError={(e) => {
+                            (e.target as HTMLElement).style.display = 'none';
+                          }}
+                        />
+                      ) : (
+                        React.createElement(getFileIcon(upload.type), { className: "h-5 w-5 text-slate-400" })
+                      )}
+                    </div>
+                    
+                    {/* Metadata */}
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-semibold text-slate-700 dark:text-zinc-200 truncate">{upload.name}</p>
+                      <p className="text-[9px] text-slate-400 dark:text-zinc-500">{upload.uploadTime}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              /* 3. Empty Recent Uploads section */
+              <div className="border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 rounded-3xl p-8 flex flex-col items-center justify-center text-center min-h-[300px] shadow-sm">
+                <div className="space-y-4 flex flex-col items-center">
+                  <div className="h-12 w-12 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-100 dark:border-zinc-800 flex items-center justify-center text-slate-400 shadow-sm">
+                    <FolderOpen className="h-5 w-5" />
+                  </div>
+                  <div className="space-y-1">
+                    <h4 className="text-xs font-semibold">No uploaded files yet</h4>
+                    <p className="text-[10px] text-slate-400 dark:text-zinc-500 max-w-[200px] leading-relaxed">
+                      Files you upload in the workspace session will appear here for processing.
+                    </p>
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
-        </motion.div>
+            )}
+          </motion.div>
+        </div>
 
       </div>
 

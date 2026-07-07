@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef } from "react";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   UploadCloud,
   Image as ImageIcon,
@@ -11,7 +11,8 @@ import {
   FolderOpen,
   ArrowRight,
   Sparkles,
-  Info
+  Info,
+  X
 } from "lucide-react";
 
 interface SelectedFile {
@@ -23,9 +24,19 @@ interface SelectedFile {
   status: "idle" | "uploading" | "success" | "error";
 }
 
+interface RecentUpload {
+  id: string;
+  name: string;
+  url: string;
+  uploadTime: string;
+  type: string;
+}
+
 export default function WorkspacePage() {
   const [isDragActive, setIsDragActive] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<SelectedFile[]>([]);
+  const [recentUploads, setRecentUploads] = useState<RecentUpload[]>([]);
+  const [previewImage, setPreviewImage] = useState<RecentUpload | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isUploading = selectedFiles.some((f) => f.status === "uploading");
@@ -66,9 +77,33 @@ export default function WorkspacePage() {
 
     xhr.addEventListener("load", () => {
       if (xhr.status >= 200 && xhr.status < 300) {
-        setSelectedFiles((prev) =>
-          prev.map((f) => (f.id === fileObj.id ? { ...f, status: "success", progress: 100 } : f))
-        );
+        try {
+          const res = JSON.parse(xhr.responseText);
+          const backendRootUrl = apiBaseUrl.replace("/api/v1", "");
+          const fileUrl = `${backendRootUrl}/${res.path}`;
+
+          setSelectedFiles((prev) =>
+            prev.map((f) => (f.id === fileObj.id ? { ...f, status: "success", progress: 100 } : f))
+          );
+
+          // Prepend to recent uploads and retain only top 10
+          const newUpload: RecentUpload = {
+            id: res.filename || Math.random().toString(36).substring(2, 9),
+            name: res.original_name || fileObj.file.name,
+            url: fileUrl,
+            uploadTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            type: fileObj.file.type
+          };
+
+          setRecentUploads((prev) => {
+            const updated = [newUpload, ...prev];
+            return updated.slice(0, 10);
+          });
+        } catch {
+          setSelectedFiles((prev) =>
+            prev.map((f) => (f.id === fileObj.id ? { ...f, status: "success", progress: 100 } : f))
+          );
+        }
       } else {
         setSelectedFiles((prev) =>
           prev.map((f) => (f.id === fileObj.id ? { ...f, status: "error", progress: 0 } : f))
@@ -362,7 +397,7 @@ export default function WorkspacePage() {
 
         </div>
 
-        {/* Right Column: Empty Recent Uploads section */}
+        {/* Right Column: Recent Uploads panel */}
         <motion.div
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
@@ -371,23 +406,110 @@ export default function WorkspacePage() {
         >
           <h2 className="text-sm font-bold tracking-tight">Recent Uploads</h2>
           
-          {/* 3. Empty Recent Uploads section */}
-          <div className="border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 rounded-3xl p-8 flex flex-col items-center justify-center text-center min-h-[300px] shadow-sm">
-            <div className="space-y-4 flex flex-col items-center">
-              <div className="h-12 w-12 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-100 dark:border-zinc-800 flex items-center justify-center text-slate-400 shadow-sm">
-                <FolderOpen className="h-5 w-5" />
-              </div>
-              <div className="space-y-1">
-                <h4 className="text-xs font-semibold">No uploaded files yet</h4>
-                <p className="text-[10px] text-slate-400 dark:text-zinc-500 max-w-[200px] leading-relaxed">
-                  Files you upload in the workspace session will appear here for processing.
-                </p>
+          {recentUploads.length > 0 ? (
+            <div className="space-y-3">
+              {recentUploads.map((upload) => (
+                <div
+                  key={upload.id}
+                  onClick={() => {
+                    if (upload.type.startsWith("image/")) {
+                      setPreviewImage(upload);
+                    }
+                  }}
+                  className={`flex items-center gap-3 p-3 rounded-2xl border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 shadow-sm transition-all ${
+                    upload.type.startsWith("image/") 
+                      ? "cursor-pointer hover:border-violet-500/30 hover:bg-slate-100/50 dark:hover:bg-zinc-900/40" 
+                      : ""
+                  }`}
+                >
+                  {/* Thumbnail / Icon wrapper */}
+                  <div className="h-12 w-12 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-100 dark:border-zinc-800 overflow-hidden flex items-center justify-center shrink-0">
+                    {upload.type.startsWith("image/") ? (
+                      <img 
+                        src={upload.url} 
+                        alt={upload.name} 
+                        className="h-full w-full object-cover"
+                        onError={(e) => {
+                          (e.target as HTMLElement).style.display = 'none';
+                        }}
+                      />
+                    ) : (
+                      React.createElement(getFileIcon(upload.type), { className: "h-5 w-5 text-slate-400" })
+                    )}
+                  </div>
+                  
+                  {/* Metadata */}
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-semibold text-slate-700 dark:text-zinc-200 truncate">{upload.name}</p>
+                    <p className="text-[9px] text-slate-400 dark:text-zinc-500">{upload.uploadTime}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            /* 3. Empty Recent Uploads section */
+            <div className="border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 rounded-3xl p-8 flex flex-col items-center justify-center text-center min-h-[300px] shadow-sm">
+              <div className="space-y-4 flex flex-col items-center">
+                <div className="h-12 w-12 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-100 dark:border-zinc-800 flex items-center justify-center text-slate-400 shadow-sm">
+                  <FolderOpen className="h-5 w-5" />
+                </div>
+                <div className="space-y-1">
+                  <h4 className="text-xs font-semibold">No uploaded files yet</h4>
+                  <p className="text-[10px] text-slate-400 dark:text-zinc-500 max-w-[200px] leading-relaxed">
+                    Files you upload in the workspace session will appear here for processing.
+                  </p>
+                </div>
               </div>
             </div>
-          </div>
+          )}
         </motion.div>
 
       </div>
+
+      {/* Image Preview Modal */}
+      <AnimatePresence>
+        {previewImage && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+            onClick={() => setPreviewImage(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, y: 15 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 15 }}
+              transition={{ type: "spring", duration: 0.4 }}
+              onClick={(e) => e.stopPropagation()}
+              className="relative max-w-3xl w-full rounded-3xl border border-slate-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 shadow-2xl flex flex-col gap-4 overflow-hidden"
+            >
+              {/* Close Button */}
+              <button
+                onClick={() => setPreviewImage(null)}
+                className="absolute top-4 right-4 p-1.5 rounded-xl border border-slate-200 dark:border-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-500 dark:text-zinc-400 z-10 transition-colors cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+
+              <div className="flex items-center justify-between pr-10">
+                <div className="min-w-0">
+                  <h3 className="text-sm font-bold truncate">{previewImage.name}</h3>
+                  <p className="text-[10px] text-slate-400 dark:text-zinc-500">Uploaded at {previewImage.uploadTime}</p>
+                </div>
+              </div>
+              
+              <div className="relative rounded-2xl overflow-hidden bg-slate-50 dark:bg-zinc-950 border border-slate-100 dark:border-zinc-900 flex items-center justify-center max-h-[70vh]">
+                <img
+                  src={previewImage.url}
+                  alt={previewImage.name}
+                  className="max-h-[60vh] max-w-full object-contain"
+                />
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
     </main>
   );

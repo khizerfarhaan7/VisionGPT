@@ -31,6 +31,13 @@ if settings.BACKEND_CORS_ORIGINS:
 # Include API endpoints under API version prefix
 app.include_router(api_router, prefix=settings.API_V1_STR)
 
+from fastapi.staticfiles import StaticFiles
+import os
+
+# Mount uploads folder to serve static files (images, audio, etc.)
+uploads_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "uploads")
+app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
+
 @app.get("/")
 def read_root():
     """

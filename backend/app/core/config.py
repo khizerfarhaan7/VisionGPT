@@ -54,5 +54,9 @@ class Settings(BaseSettings):
     # Storage
     UPLOAD_DIR: str = "uploads"
 
+    # API Keys
+    GEMINI_API_KEY: str | None = None
+
 
 settings = Settings()
+print("Loaded Gemini Key:", settings.GEMINI_API_KEY)

@@ -14,10 +14,21 @@ import {
   Info
 } from "lucide-react";
 
+interface SelectedFile {
+  id: string;
+  name: string;
+  size: number;
+  type: string;
+  progress: number;
+  status: "idle" | "uploading" | "success" | "error";
+}
+
 export default function WorkspacePage() {
   const [isDragActive, setIsDragActive] = useState(false);
-  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [selectedFiles, setSelectedFiles] = useState<SelectedFile[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const isUploading = selectedFiles.some((f) => f.status === "uploading");
 
   const getFileIcon = (mimeType: string) => {
     if (mimeType.startsWith("image/")) return ImageIcon;
@@ -36,15 +47,74 @@ export default function WorkspacePage() {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i];
   };
 
+  const startUpload = (fileObj: { id: string; file: File }) => {
+    const xhr = new XMLHttpRequest();
+    const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+    const url = `${apiBaseUrl}/upload/image`;
+
+    const formData = new FormData();
+    formData.append("file", fileObj.file);
+
+    xhr.upload.addEventListener("progress", (event) => {
+      if (event.lengthComputable) {
+        const percentage = Math.round((event.loaded * 100) / event.total);
+        setSelectedFiles((prev) =>
+          prev.map((f) => (f.id === fileObj.id ? { ...f, progress: percentage } : f))
+        );
+      }
+    });
+
+    xhr.addEventListener("load", () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        setSelectedFiles((prev) =>
+          prev.map((f) => (f.id === fileObj.id ? { ...f, status: "success", progress: 100 } : f))
+        );
+      } else {
+        setSelectedFiles((prev) =>
+          prev.map((f) => (f.id === fileObj.id ? { ...f, status: "error", progress: 0 } : f))
+        );
+      }
+    });
+
+    xhr.addEventListener("error", () => {
+      setSelectedFiles((prev) =>
+        prev.map((f) => (f.id === fileObj.id ? { ...f, status: "error", progress: 0 } : f))
+      );
+    });
+
+    xhr.open("POST", url, true);
+    xhr.send(formData);
+  };
+
+  const handleFilesAdded = (files: File[]) => {
+    const newFiles = files.map((file) => ({
+      id: Math.random().toString(36).substring(2, 9),
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      progress: 0,
+      status: "uploading" as const
+    }));
+
+    setSelectedFiles((prev) => [...prev, ...newFiles]);
+
+    newFiles.forEach((newFile, index) => {
+      startUpload({ id: newFile.id, file: files[index] });
+    });
+  };
+
   const handleButtonClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    fileInputRef.current?.click();
+    if (!isUploading) {
+      fileInputRef.current?.click();
+    }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (isUploading) return;
     if (e.target.files && e.target.files.length > 0) {
       const filesArray = Array.from(e.target.files);
-      setSelectedFiles((prev) => [...prev, ...filesArray]);
+      handleFilesAdded(filesArray);
     }
   };
 
@@ -52,9 +122,21 @@ export default function WorkspacePage() {
     e.preventDefault();
     e.stopPropagation();
     setIsDragActive(false);
+    if (isUploading) return;
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const filesArray = Array.from(e.dataTransfer.files);
-      setSelectedFiles((prev) => [...prev, ...filesArray]);
+      handleFilesAdded(filesArray);
+    }
+  };
+
+  const handleDrag = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (isUploading) return;
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setIsDragActive(true);
+    } else if (e.type === "dragleave") {
+      setIsDragActive(false);
     }
   };
 
@@ -88,16 +170,6 @@ export default function WorkspacePage() {
       color: "text-amber-500 bg-amber-500/10 border-amber-500/20"
     }
   ];
-
-  const handleDrag = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === "dragenter" || e.type === "dragover") {
-      setIsDragActive(true);
-    } else if (e.type === "dragleave") {
-      setIsDragActive(false);
-    }
-  };
 
   return (
     <main className="p-6 md:p-10 max-w-7xl mx-auto w-full space-y-10">
@@ -133,11 +205,13 @@ export default function WorkspacePage() {
             onDragOver={handleDrag}
             onDragLeave={handleDrag}
             onDrop={handleDrop}
-            onClick={() => fileInputRef.current?.click()}
-            className={`relative rounded-3xl border-2 border-dashed p-10 md:p-12 transition-all duration-300 flex flex-col items-center justify-center text-center group cursor-pointer ${
-              isDragActive
+            onClick={() => !isUploading && fileInputRef.current?.click()}
+            className={`relative rounded-3xl border-2 border-dashed p-10 md:p-12 transition-all duration-300 flex flex-col items-center justify-center text-center group ${
+              isUploading ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:border-slate-300 dark:hover:border-zinc-700 hover:bg-slate-50/50 dark:hover:bg-zinc-900/30"
+            } ${
+              isDragActive && !isUploading
                 ? "border-violet-500 bg-violet-500/5 ring-4 ring-violet-500/5 scale-[1.01]"
-                : "border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 hover:border-slate-300 dark:hover:border-zinc-700 hover:bg-slate-50/50 dark:hover:bg-zinc-900/30"
+                : "border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20"
             }`}
           >
             <input
@@ -147,14 +221,15 @@ export default function WorkspacePage() {
               multiple
               accept="image/*,application/pdf,audio/*,video/*"
               className="hidden"
+              disabled={isUploading}
             />
             <div className="space-y-6 flex flex-col items-center">
               {/* Icon wrapper */}
               <div className={`h-16 w-16 rounded-2xl bg-slate-50 dark:bg-zinc-900 border border-slate-100 dark:border-zinc-800 flex items-center justify-center shadow-sm transition-all duration-300 group-hover:scale-110 group-hover:border-violet-500/30 ${
-                isDragActive ? "border-violet-500/30 text-violet-500 bg-violet-50/20" : "text-slate-400"
+                isDragActive && !isUploading ? "border-violet-500/30 text-violet-500 bg-violet-50/20" : "text-slate-400"
               }`}>
                 <UploadCloud className={`h-8 w-8 transition-transform duration-300 ${
-                  isDragActive ? "scale-110 text-violet-500" : "group-hover:-translate-y-1"
+                  isDragActive && !isUploading ? "scale-110 text-violet-500" : "group-hover:-translate-y-1"
                 }`} />
               </div>
 
@@ -168,9 +243,12 @@ export default function WorkspacePage() {
               {/* Upload Button */}
               <button 
                 onClick={handleButtonClick}
-                className="relative inline-flex items-center gap-2 px-5 py-2 rounded-xl text-xs font-semibold text-white bg-gradient-to-tr from-violet-600 to-indigo-500 shadow-md shadow-violet-600/20 hover:shadow-lg hover:shadow-violet-600/25 transition-all transform active:scale-95 cursor-pointer"
+                disabled={isUploading}
+                className={`relative inline-flex items-center gap-2 px-5 py-2 rounded-xl text-xs font-semibold text-white bg-gradient-to-tr from-violet-600 to-indigo-500 shadow-md shadow-violet-600/20 hover:shadow-lg hover:shadow-violet-600/25 transition-all transform active:scale-95 ${
+                  isUploading ? "opacity-50 cursor-not-allowed active:scale-100" : "cursor-pointer"
+                }`}
               >
-                <span>Select Files</span>
+                <span>{isUploading ? "Uploading..." : "Select Files"}</span>
                 <ArrowRight className="h-3.5 w-3.5" />
               </button>
             </div>
@@ -188,9 +266,12 @@ export default function WorkspacePage() {
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    setSelectedFiles([]);
+                    if (!isUploading) setSelectedFiles([]);
                   }}
-                  className="text-[10px] text-red-500 hover:text-red-650 font-medium hover:underline transition-colors"
+                  disabled={isUploading}
+                  className={`text-[10px] font-medium hover:underline transition-colors ${
+                    isUploading ? "text-slate-400 cursor-not-allowed" : "text-red-500 hover:text-red-650"
+                  }`}
                 >
                   Clear All
                 </button>
@@ -209,12 +290,35 @@ export default function WorkspacePage() {
                           <Icon className="h-4.5 w-4.5 text-violet-600 dark:text-violet-400" />
                         </div>
                         <div className="min-w-0">
-                          <p className="font-semibold text-slate-700 dark:text-zinc-200 truncate max-w-[200px] sm:max-w-md">{file.name}</p>
+                          <p className="font-semibold text-slate-700 dark:text-zinc-200 truncate max-w-[150px] sm:max-w-xs md:max-w-sm">{file.name}</p>
                           <p className="text-[9px] text-slate-400 dark:text-zinc-500 uppercase">{file.type || 'unknown type'}</p>
                         </div>
                       </div>
-                      <div className="text-right shrink-0">
-                        <p className="font-medium text-slate-500 dark:text-zinc-400 text-[11px]">{formatBytes(file.size)}</p>
+                      <div className="flex items-center gap-3 shrink-0">
+                        {file.status === "uploading" && (
+                          <div className="flex items-center gap-2">
+                            <div className="w-16 h-1.5 bg-slate-200 dark:bg-zinc-850 rounded-full overflow-hidden">
+                              <div 
+                                className="h-full bg-violet-500 transition-all duration-300" 
+                                style={{ width: `${file.progress}%` }}
+                              />
+                            </div>
+                            <span className="text-[10px] text-slate-400 dark:text-zinc-500 font-semibold">{file.progress}%</span>
+                          </div>
+                        )}
+                        {file.status === "success" && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                            Uploaded
+                          </span>
+                        )}
+                        {file.status === "error" && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-semibold bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20">
+                            Failed
+                          </span>
+                        )}
+                        <p className="font-medium text-slate-500 dark:text-zinc-400 text-[11px] min-w-[50px] text-right">
+                          {formatBytes(file.size)}
+                        </p>
                       </div>
                     </div>
                   );

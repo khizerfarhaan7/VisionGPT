@@ -66,6 +66,16 @@ interface IndexResult {
   metadata_location: string;
 }
 
+interface PDFChatMessage {
+  role: "user" | "assistant";
+  content: string;
+  sources?: {
+    chunk_id: string;
+    page: string;
+    similarity_score: number;
+  }[];
+}
+
 export default function WorkspacePage() {
   const [isDragActive, setIsDragActive] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<SelectedFile[]>([]);
@@ -91,17 +101,31 @@ export default function WorkspacePage() {
   const [indexResults, setIndexResults] = useState<Record<string, IndexResult>>({});
   const [indexLoading, setIndexLoading] = useState(false);
 
+  // States for PDF RAG conversational chat module
+  const [pdfChatHistories, setPdfChatHistories] = useState<Record<string, PDFChatMessage[]>>({});
+  const [pdfChatLoading, setPdfChatLoading] = useState(false);
+  const [pdfChatInput, setPdfChatInput] = useState("");
+  const [activePdfTab, setActivePdfTab] = useState<"chat" | "chunks">("chat");
+
   const chatScrollRef = useRef<HTMLDivElement>(null);
+  const pdfChatScrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isUploading = selectedFiles.some((f) => f.status === "uploading");
 
-  // Scroll to bottom of chat history when message list or loading state changes
+  // Scroll to bottom of visual chat history when message list or loading state changes
   useEffect(() => {
     if (chatScrollRef.current) {
       chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
     }
   }, [chatHistories, analysisLoading, activeFileId]);
+
+  // Scroll to bottom of PDF RAG chat history
+  useEffect(() => {
+    if (pdfChatScrollRef.current) {
+      pdfChatScrollRef.current.scrollTop = pdfChatScrollRef.current.scrollHeight;
+    }
+  }, [pdfChatHistories, pdfChatLoading, activePdfTab, activeFileId]);
 
   const toggleChunk = (chunkId: string) => {
     setExpandedChunks((prev) => ({ ...prev, [chunkId]: !prev[chunkId] }));
@@ -296,6 +320,15 @@ export default function WorkspacePage() {
             metadata_location: data.metadata_location,
           }
         }));
+        
+        // Auto-switch to chat tab and initialize welcome message
+        setActivePdfTab("chat");
+        setPdfChatHistories((prev) => ({
+          ...prev,
+          [activeFileId]: [
+            { role: "assistant", content: "Welcome! I have finished indexing your PDF into the local knowledge base. Ask me anything!" }
+          ]
+        }));
       } else {
         alert("Failed to build local knowledge base index.");
       }
@@ -357,12 +390,70 @@ export default function WorkspacePage() {
     }
   };
 
+  const handleSendPdfMessage = async () => {
+    if (!activeFileId || !pdfChatInput.trim() || pdfChatLoading) return;
+
+    const targetFile = selectedFiles.find((f) => f.id === activeFileId);
+    if (!targetFile) return;
+
+    const userMessageContent = pdfChatInput.trim();
+    setPdfChatInput("");
+
+    const userMessage: PDFChatMessage = { role: "user", content: userMessageContent };
+    const currentHistory = pdfChatHistories[activeFileId] || [];
+
+    setPdfChatHistories((prev) => ({
+      ...prev,
+      [activeFileId]: [...(prev[activeFileId] || []), userMessage]
+    }));
+
+    setPdfChatLoading(true);
+
+    try {
+      const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+      const response = await fetch(`${apiBaseUrl}/pdf/chat`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          filename: targetFile.savedName || targetFile.name,
+          question: userMessageContent,
+          history: currentHistory.map((m) => ({ role: m.role, content: m.content }))
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const assistantMessage: PDFChatMessage = { 
+          role: "assistant", 
+          content: data.answer,
+          sources: data.sources 
+        };
+        
+        setPdfChatHistories((prev) => ({
+          ...prev,
+          [activeFileId]: [...(prev[activeFileId] || []), assistantMessage]
+        }));
+      } else {
+        const errJson = await response.json();
+        const errMsg = errJson.detail || "Failed to process RAG chat response.";
+        alert(`RAG Error: ${errMsg}`);
+      }
+    } catch {
+      alert("Error contacting the PDF chat RAG service. Make sure Ollama LLM is running locally.");
+    } finally {
+      setPdfChatLoading(false);
+    }
+  };
+
   const handleFilesAdded = (files: File[]) => {
     // Preserve chat histories until new files are uploaded, then clear them
     setChatHistories({});
     setExtractResults({});
     setChunkResults({});
     setIndexResults({});
+    setPdfChatHistories({});
     setExpandedChunks({});
     setActiveFileId(null);
 
@@ -523,7 +614,7 @@ export default function WorkspacePage() {
               <button 
                 onClick={handleButtonClick}
                 disabled={isUploading}
-                className={`relative inline-flex items-center gap-2 px-5 py-2 rounded-xl text-xs font-semibold text-white bg-gradient-to-tr from-violet-600 to-indigo-500 shadow-md shadow-violet-600/20 hover:shadow-lg hover:shadow-violet-600/25 transition-all transform active:scale-95 ${
+                className={`relative inline-flex items-center gap-2 px-5 py-2 rounded-xl text-xs font-semibold text-white bg-gradient-to-tr from-violet-650 to-indigo-500 shadow-md shadow-violet-650/20 hover:shadow-lg hover:shadow-violet-650/25 transition-all transform active:scale-95 ${
                   isUploading ? "opacity-50 cursor-not-allowed active:scale-100" : "cursor-pointer"
                 }`}
               >
@@ -616,7 +707,7 @@ export default function WorkspacePage() {
                                 }}
                                 className={`px-2.5 py-0.5 rounded-md text-[9px] font-bold shadow-sm transition-all transform active:scale-95 cursor-pointer ${
                                   activeFileId === file.id
-                                    ? "bg-red-600 text-white"
+                                    ? "bg-red-650 text-white"
                                     : "bg-slate-200/80 hover:bg-slate-300/85 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300"
                                 }`}
                               >
@@ -734,29 +825,155 @@ export default function WorkspacePage() {
                     </div>
                   )}
 
-                  {/* Scrollable Chunks List */}
-                  <div className="flex-1 min-h-[160px] max-h-[220px] overflow-y-auto space-y-2 pr-1 font-sans text-xs">
-                    {chunkResults[activeFileId].chunks.map((chunk) => {
-                      const isExpanded = !!expandedChunks[chunk.chunk_id];
-                      return (
-                        <div
-                          key={chunk.chunk_id}
-                          onClick={() => toggleChunk(chunk.chunk_id)}
-                          className="p-3 rounded-2xl border border-slate-100 dark:border-zinc-855 bg-slate-50/50 dark:bg-zinc-950/40 cursor-pointer hover:border-slate-200 dark:hover:border-zinc-800 transition-all space-y-2"
-                        >
-                          <div className="flex items-center justify-between font-semibold text-[9px] text-slate-500 dark:text-zinc-405">
-                            <span className="uppercase tracking-wider font-bold text-violet-600 dark:text-violet-400">{chunk.chunk_id}</span>
-                            <span>Page(s): {chunk.page} • {chunk.text.length} chars</span>
+                  {/* Tabs Switcher for Chunk Explorer vs RAG Chat */}
+                  {indexResults[activeFileId] && (
+                    <div className="flex border-b border-slate-100 dark:border-zinc-800">
+                      <button
+                        onClick={() => setActivePdfTab("chat")}
+                        className={`flex-1 pb-2 text-xs font-bold text-center border-b-2 transition-colors cursor-pointer ${
+                          activePdfTab === "chat"
+                            ? "border-red-500 text-slate-800 dark:text-zinc-150"
+                            : "border-transparent text-slate-400 dark:text-zinc-500"
+                        }`}
+                      >
+                        Ask Document
+                      </button>
+                      <button
+                        onClick={() => setActivePdfTab("chunks")}
+                        className={`flex-1 pb-2 text-xs font-bold text-center border-b-2 transition-colors cursor-pointer ${
+                          activePdfTab === "chunks"
+                            ? "border-red-500 text-slate-800 dark:text-zinc-150"
+                            : "border-transparent text-slate-400 dark:text-zinc-500"
+                        }`}
+                      >
+                        Browse Chunks
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Tab View Contents */}
+                  {(!indexResults[activeFileId] || activePdfTab === "chunks") ? (
+                    /* Scrollable Chunks List */
+                    <div className="flex-1 min-h-[160px] max-h-[220px] overflow-y-auto space-y-2 pr-1 font-sans text-xs">
+                      {chunkResults[activeFileId].chunks.map((chunk) => {
+                        const isExpanded = !!expandedChunks[chunk.chunk_id];
+                        return (
+                          <div
+                            key={chunk.chunk_id}
+                            onClick={() => toggleChunk(chunk.chunk_id)}
+                            className="p-3 rounded-2xl border border-slate-100 dark:border-zinc-855 bg-slate-50/50 dark:bg-zinc-950/40 cursor-pointer hover:border-slate-200 dark:hover:border-zinc-800 transition-all space-y-2"
+                          >
+                            <div className="flex items-center justify-between font-semibold text-[9px] text-slate-500 dark:text-zinc-405">
+                              <span className="uppercase tracking-wider font-bold text-violet-600 dark:text-violet-400">{chunk.chunk_id}</span>
+                              <span>Page(s): {chunk.page} • {chunk.text.length} chars</span>
+                            </div>
+                            <p className={`text-[11px] leading-relaxed text-slate-600 dark:text-zinc-350 ${
+                              isExpanded ? "whitespace-pre-wrap font-mono text-[10px] bg-slate-100/50 dark:bg-zinc-955/50 p-2 rounded-xl border border-slate-200/30 dark:border-zinc-900/30" : "truncate"
+                            }`}>
+                              {isExpanded ? chunk.text : `${chunk.text.slice(0, 150)}${chunk.text.length > 150 ? '...' : ''}`}
+                            </p>
                           </div>
-                          <p className={`text-[11px] leading-relaxed text-slate-600 dark:text-zinc-350 ${
-                            isExpanded ? "whitespace-pre-wrap font-mono text-[10px] bg-slate-100/50 dark:bg-zinc-955/50 p-2 rounded-xl border border-slate-200/30 dark:border-zinc-900/30" : "truncate"
-                          }`}>
-                            {isExpanded ? chunk.text : `${chunk.text.slice(0, 150)}${chunk.text.length > 150 ? '...' : ''}`}
-                          </p>
-                        </div>
-                      );
-                    })}
-                  </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    /* RAG Chat interface view */
+                    <div className="flex flex-col flex-1 min-h-0 space-y-3">
+                      {/* Chat Messages scroll area */}
+                      <div
+                        ref={pdfChatScrollRef}
+                        className="flex-1 overflow-y-auto space-y-3.5 pr-1 text-xs scroll-smooth max-h-[180px] min-h-[140px]"
+                      >
+                        {(pdfChatHistories[activeFileId] || []).map((msg, idx) => {
+                          const isUser = msg.role === "user";
+                          return (
+                            <div
+                              key={idx}
+                              className={`flex flex-col ${isUser ? "items-end" : "items-start"}`}
+                            >
+                              <div
+                                className={`max-w-[85%] rounded-2xl px-3 py-2 shadow-sm leading-relaxed whitespace-pre-wrap break-words ${
+                                  isUser
+                                    ? "bg-red-650 text-white rounded-tr-none"
+                                    : "bg-slate-100 dark:bg-zinc-850 text-slate-800 dark:text-zinc-250 rounded-tl-none border border-slate-200/20 dark:border-zinc-800/30"
+                                }`}
+                              >
+                                {msg.content}
+                              </div>
+                              
+                              {/* Sources list details */}
+                              {!isUser && msg.sources && msg.sources.length > 0 && (
+                                <div className="mt-1 flex flex-wrap gap-1 px-1">
+                                  <span className="text-[8px] text-slate-400 dark:text-zinc-500 font-semibold self-center">Sources:</span>
+                                  {msg.sources.map((s, sIdx) => (
+                                    <span
+                                      key={sIdx}
+                                      className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[8px] font-semibold bg-slate-200/60 dark:bg-zinc-800/80 text-slate-500 dark:text-zinc-400 border border-slate-300/10"
+                                    >
+                                      {s.chunk_id} (p. {s.page})
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+
+                        {/* Typing Animation */}
+                        {pdfChatLoading && (
+                          <div className="flex justify-start">
+                            <div className="bg-slate-100 dark:bg-zinc-855 text-slate-500 dark:text-zinc-455 rounded-2xl rounded-tl-none px-3 py-1.5 border border-slate-200/20 dark:border-zinc-800/30 shadow-sm flex items-center gap-2">
+                              <div className="flex gap-1">
+                                <span className="w-1.5 h-1.5 bg-slate-400 dark:bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: "0ms" }}></span>
+                                <span className="w-1.5 h-1.5 bg-slate-400 dark:bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: "150ms" }}></span>
+                                <span className="w-1.5 h-1.5 bg-slate-400 dark:bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: "300ms" }}></span>
+                              </div>
+                              <span className="text-[9px] font-semibold italic">VisionGPT is typing...</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Chat Input & Clear Chat wrapper */}
+                      <div className="pt-2 border-t border-slate-100 dark:border-zinc-855 flex gap-2 items-center">
+                        <button
+                          onClick={() => {
+                            setPdfChatHistories((prev) => ({
+                              ...prev,
+                              [activeFileId]: [
+                                { role: "assistant", content: "Chat cleared. Ask me anything about the document!" }
+                              ]
+                            }));
+                          }}
+                          className="px-2.5 py-2 rounded-xl bg-slate-250 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 text-slate-600 dark:text-zinc-300 text-[10px] font-bold transition-all shrink-0 cursor-pointer border-0"
+                        >
+                          Clear
+                        </button>
+                        
+                        <input
+                          value={pdfChatInput}
+                          onChange={(e) => setPdfChatInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && !e.shiftKey) {
+                              e.preventDefault();
+                              handleSendPdfMessage();
+                            }
+                          }}
+                          placeholder="Ask anything about the PDF..."
+                          disabled={pdfChatLoading}
+                          className="flex-1 px-3 py-2 rounded-xl text-[11px] border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 focus:outline-none focus:ring-2 focus:ring-red-500/30 disabled:opacity-60 disabled:cursor-not-allowed h-9"
+                        />
+                        
+                        <button
+                          onClick={handleSendPdfMessage}
+                          disabled={pdfChatLoading || !pdfChatInput.trim()}
+                          className="px-3.5 py-2 rounded-xl bg-red-650 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-[11px] font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center h-9 cursor-pointer border-0"
+                        >
+                          Send
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               ) : extractResults[activeFileId] ? (
                 /* Text Extraction results block */
@@ -778,7 +995,7 @@ export default function WorkspacePage() {
                   </div>
 
                   {/* Scrollable Text Viewer */}
-                  <div className="flex-1 min-h-[220px] max-h-[300px] overflow-y-auto p-3 rounded-xl border border-slate-150 dark:border-zinc-850 bg-slate-50/50 dark:bg-zinc-950/40 font-mono text-[10px] text-slate-600 dark:text-zinc-350 leading-normal whitespace-pre-wrap break-words">
+                  <div className="flex-1 min-h-[220px] max-h-[300px] overflow-y-auto p-3 rounded-xl border border-slate-150 dark:border-zinc-855 bg-slate-50/50 dark:bg-zinc-950/40 font-mono text-[10px] text-slate-600 dark:text-zinc-350 leading-normal whitespace-pre-wrap break-words">
                     {extractResults[activeFileId].extractedText}
                   </div>
                 </div>
@@ -937,7 +1154,7 @@ export default function WorkspacePage() {
                       <div
                         className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 shadow-sm leading-relaxed whitespace-pre-wrap break-words ${
                           isUser
-                            ? "bg-violet-650 text-white rounded-tr-none"
+                            ? "bg-violet-600 text-white rounded-tr-none"
                             : "bg-slate-100 dark:bg-zinc-850 text-slate-800 dark:text-zinc-250 rounded-tl-none border border-slate-200/20 dark:border-zinc-800/30"
                         }`}
                       >
@@ -963,7 +1180,7 @@ export default function WorkspacePage() {
               </div>
 
               {/* Chat Input Area (Fixed at bottom) */}
-              <div className="p-3 border-t border-slate-100 dark:border-zinc-855 bg-slate-50/50 dark:bg-zinc-950/20">
+              <div className="p-3 border-t border-slate-100 dark:border-zinc-855 bg-slate-50/50 dark:bg-zinc-955/20">
                 <div className="flex gap-2 items-end">
                   <textarea
                     value={currentInput}

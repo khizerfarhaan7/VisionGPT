@@ -312,4 +312,130 @@ async def index_pdf(payload: PDFIndexRequestSchema):
             detail=f"Failed to generate embeddings and build FAISS index: {str(e)}"
         )
 
+import httpx
+from app.schemas.chat import PDFChatRequestSchema, PDFChatResponseSchema
+
+@router.post("/chat", response_model=PDFChatResponseSchema, status_code=status.HTTP_200_OK)
+async def chat_pdf(payload: PDFChatRequestSchema):
+    """
+    Perform local RAG chat over the PDF knowledge base using FAISS vector retrieval and local Ollama model.
+    """
+    safe_filename = os.path.basename(payload.filename)
+    pdf_id = os.path.splitext(safe_filename)[0]
+    
+    # Check if index and metadata exist
+    vector_store_dir = Path(settings.UPLOAD_DIR) / "vector_store" / pdf_id
+    index_path = vector_store_dir / "faiss.index"
+    metadata_path = vector_store_dir / "metadata.json"
+
+    if not index_path.exists() or not metadata_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The requested PDF document is not indexed. Please build the knowledge base first."
+        )
+
+    # Load FAISS index and metadata
+    try:
+        index = faiss.read_index(str(index_path))
+        with open(metadata_path, "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load vector store or metadata: {str(e)}"
+        )
+
+    # 1. Generate embedding for query using BAAI/bge-small-en-v1.5
+    try:
+        model = get_embedding_model()
+        query_vector = model.encode([payload.question], convert_to_numpy=True).astype("float32")
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate query embedding: {str(e)}"
+        )
+
+    # 2. Search FAISS index (Top K=5)
+    k = 5
+    try:
+        distances, indices = index.search(query_vector, k)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"FAISS search execution failed: {str(e)}"
+        )
+
+    # 3. Retrieve chunks and construct prompt context
+    sources = []
+    context_blocks = []
+    
+    for rank, idx_val in enumerate(indices[0]):
+        if idx_val == -1 or idx_val >= len(metadata):
+            continue
+        chunk_info = metadata[idx_val]
+        dist = float(distances[0][rank])
+        
+        sources.append({
+            "chunk_id": chunk_info["chunk_id"],
+            "page": str(chunk_info["page"]),
+            "similarity_score": dist
+        })
+        context_blocks.append(f"Source: {chunk_info['chunk_id']} (Page {chunk_info['page']})\n{chunk_info['text']}")
+
+    rag_context = "\n\n---\n\n".join(context_blocks)
+
+    # 4. Formulate instructions and messages list for Ollama
+    system_prompt = (
+        "You are a helpful assistant answering questions about a PDF document.\n"
+        "Answer the question naturally and accurately based only on the provided context.\n"
+        "If the answer cannot be determined from the context, clearly say so."
+    )
+    
+    messages = [{"role": "system", "content": system_prompt}]
+    
+    # Feed conversation history
+    for msg in payload.history:
+        role = "user" if msg.role == "user" else "assistant"
+        messages.append({"role": role, "content": msg.content})
+
+    # Add final query turn incorporating RAG context
+    final_content = (
+        f"Context from PDF:\n{rag_context}\n\n"
+        f"Question: {payload.question}"
+    )
+    messages.append({"role": "user", "content": final_content})
+
+    # 5. Query Ollama model
+    ollama_url = f"{settings.OLLAMA_BASE_URL}/api/chat"
+    ollama_payload = {
+        "model": settings.OLLAMA_MODEL,
+        "messages": messages,
+        "stream": False
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(ollama_url, json=ollama_payload)
+            if response.status_code != 200:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Local LLM service returned status code {response.status_code}. Please verify Ollama is running and has model {settings.OLLAMA_MODEL} loaded."
+                )
+            
+            res_data = response.json()
+            answer = res_data.get("message", {}).get("content", "").strip()
+            
+            return {
+                "success": True,
+                "answer": answer,
+                "sources": sources
+            }
+            
+    except httpx.RequestError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Local LLM service (Ollama) is unavailable: {str(e)}. Please verify Ollama is running on {settings.OLLAMA_BASE_URL}."
+        )
+
+
 

@@ -56,6 +56,11 @@ class Settings(BaseSettings):
 
     # API Keys
     GEMINI_API_KEY: str | None = None
+    
+    # LLM Settings
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    OLLAMA_MODEL: str = "qwen3"
+
 
 
 settings = Settings()

@@ -58,6 +58,14 @@ interface ChunkResult {
   chunks: ChunkItem[];
 }
 
+interface IndexResult {
+  embedding_model: string;
+  vector_dimension: number;
+  total_vectors: number;
+  index_location: string;
+  metadata_location: string;
+}
+
 export default function WorkspacePage() {
   const [isDragActive, setIsDragActive] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<SelectedFile[]>([]);
@@ -78,6 +86,10 @@ export default function WorkspacePage() {
   const [chunkResults, setChunkResults] = useState<Record<string, ChunkResult>>({});
   const [chunkLoading, setChunkLoading] = useState(false);
   const [expandedChunks, setExpandedChunks] = useState<Record<string, boolean>>({});
+
+  // States for PDF FAISS indexing module
+  const [indexResults, setIndexResults] = useState<Record<string, IndexResult>>({});
+  const [indexLoading, setIndexLoading] = useState(false);
 
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -260,6 +272,40 @@ export default function WorkspacePage() {
     }
   };
 
+  const triggerIndexing = async (savedName: string) => {
+    if (!activeFileId || indexLoading) return;
+    setIndexLoading(true);
+    try {
+      const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+      const response = await fetch(`${apiBaseUrl}/pdf/index`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ filename: savedName }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setIndexResults((prev) => ({
+          ...prev,
+          [activeFileId]: {
+            embedding_model: data.embedding_model,
+            vector_dimension: data.vector_dimension,
+            total_vectors: data.total_vectors,
+            index_location: data.index_location,
+            metadata_location: data.metadata_location,
+          }
+        }));
+      } else {
+        alert("Failed to build local knowledge base index.");
+      }
+    } catch {
+      alert("Error contacting the indexing service.");
+    } finally {
+      setIndexLoading(false);
+    }
+  };
+
   const handleSendMessage = async () => {
     if (!activeFileId || !currentInput.trim() || analysisLoading) return;
 
@@ -316,6 +362,7 @@ export default function WorkspacePage() {
     setChatHistories({});
     setExtractResults({});
     setChunkResults({});
+    setIndexResults({});
     setExpandedChunks({});
     setActiveFileId(null);
 
@@ -658,34 +705,51 @@ export default function WorkspacePage() {
               {/* PDF Preview details block / Scrollable Text / Chunk Viewer */}
               {chunkResults[activeFileId] ? (
                 <div className="flex-1 flex flex-col min-h-0 space-y-4 animate-fade-in">
-                  {/* Chunk Metrics Grid */}
-                  <div className="grid grid-cols-2 gap-2 text-center">
-                    <div className="p-2 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-100 dark:border-zinc-850">
-                      <p className="text-[9px] text-slate-400 dark:text-zinc-500 font-medium">Total Chunks</p>
-                      <p className="text-xs font-bold text-slate-700 dark:text-zinc-250">{chunkResults[activeFileId].total_chunks}</p>
+                  
+                  {/* Index Status Panel */}
+                  {indexResults[activeFileId] ? (
+                    <div className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-[10px] space-y-2.5">
+                      <div className="flex items-center justify-between font-bold text-emerald-600 dark:text-emerald-400">
+                        <span>Status: Knowledge Base Ready</span>
+                        <span className="inline-flex h-2 w-2 rounded-full bg-emerald-500 animate-ping"></span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-slate-500 dark:text-zinc-450">
+                        <div>Model: <span className="font-semibold text-slate-700 dark:text-zinc-300">{indexResults[activeFileId].embedding_model}</span></div>
+                        <div>Vectors: <span className="font-semibold text-slate-700 dark:text-zinc-300">{indexResults[activeFileId].total_vectors}</span></div>
+                        <div>Dimension: <span className="font-semibold text-slate-700 dark:text-zinc-300">{indexResults[activeFileId].vector_dimension}</span></div>
+                        <div>Index: <span className="font-semibold text-slate-700 dark:text-zinc-300">FAISS IndexFlatL2</span></div>
+                      </div>
                     </div>
-                    <div className="p-2 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-100 dark:border-zinc-850">
-                      <p className="text-[9px] text-slate-400 dark:text-zinc-500 font-medium">Avg Size (Chars)</p>
-                      <p className="text-xs font-bold text-slate-700 dark:text-zinc-250">{chunkResults[activeFileId].average_chunk_size}</p>
+                  ) : (
+                    /* Chunk Metrics Grid */
+                    <div className="grid grid-cols-2 gap-2 text-center">
+                      <div className="p-2 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-100 dark:border-zinc-850">
+                        <p className="text-[9px] text-slate-400 dark:text-zinc-500 font-medium">Total Chunks</p>
+                        <p className="text-xs font-bold text-slate-700 dark:text-zinc-250">{chunkResults[activeFileId].total_chunks}</p>
+                      </div>
+                      <div className="p-2 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-100 dark:border-zinc-850">
+                        <p className="text-[9px] text-slate-400 dark:text-zinc-500 font-medium">Avg Size (Chars)</p>
+                        <p className="text-xs font-bold text-slate-700 dark:text-zinc-250">{chunkResults[activeFileId].average_chunk_size}</p>
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                   {/* Scrollable Chunks List */}
-                  <div className="flex-1 min-h-[220px] max-h-[300px] overflow-y-auto space-y-2 pr-1 font-sans text-xs">
+                  <div className="flex-1 min-h-[160px] max-h-[220px] overflow-y-auto space-y-2 pr-1 font-sans text-xs">
                     {chunkResults[activeFileId].chunks.map((chunk) => {
                       const isExpanded = !!expandedChunks[chunk.chunk_id];
                       return (
                         <div
                           key={chunk.chunk_id}
                           onClick={() => toggleChunk(chunk.chunk_id)}
-                          className="p-3 rounded-2xl border border-slate-100 dark:border-zinc-850 bg-slate-50/50 dark:bg-zinc-950/40 cursor-pointer hover:border-slate-200 dark:hover:border-zinc-800 transition-all space-y-2"
+                          className="p-3 rounded-2xl border border-slate-100 dark:border-zinc-855 bg-slate-50/50 dark:bg-zinc-950/40 cursor-pointer hover:border-slate-200 dark:hover:border-zinc-800 transition-all space-y-2"
                         >
                           <div className="flex items-center justify-between font-semibold text-[9px] text-slate-500 dark:text-zinc-405">
                             <span className="uppercase tracking-wider font-bold text-violet-600 dark:text-violet-400">{chunk.chunk_id}</span>
                             <span>Page(s): {chunk.page} • {chunk.text.length} chars</span>
                           </div>
                           <p className={`text-[11px] leading-relaxed text-slate-600 dark:text-zinc-350 ${
-                            isExpanded ? "whitespace-pre-wrap font-mono text-[10px] bg-slate-100/50 dark:bg-zinc-950/50 p-2 rounded-xl border border-slate-200/30 dark:border-zinc-900/30" : "truncate"
+                            isExpanded ? "whitespace-pre-wrap font-mono text-[10px] bg-slate-100/50 dark:bg-zinc-955/50 p-2 rounded-xl border border-slate-200/30 dark:border-zinc-900/30" : "truncate"
                           }`}>
                             {isExpanded ? chunk.text : `${chunk.text.slice(0, 150)}${chunk.text.length > 150 ? '...' : ''}`}
                           </p>
@@ -739,8 +803,33 @@ export default function WorkspacePage() {
                 </div>
               )}
 
-              {/* Action Buttons: Create Chunks, Extract Text, Open PDF */}
+              {/* Action Buttons: Build Knowledge Base, Create Chunks, Extract Text, Open PDF */}
               <div className="space-y-2.5">
+                {chunkResults[activeFileId] && !indexResults[activeFileId] && (
+                  <button
+                    onClick={() => {
+                      const target = selectedFiles.find((f) => f.id === activeFileId);
+                      if (target?.savedName) {
+                        triggerIndexing(target.savedName);
+                      }
+                    }}
+                    disabled={indexLoading}
+                    className="w-full py-2.5 rounded-xl bg-violet-650 hover:bg-violet-755 disabled:opacity-50 text-white text-xs font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center gap-2 cursor-pointer border-0 disabled:cursor-not-allowed"
+                  >
+                    {indexLoading ? (
+                      <>
+                        <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                        <span>Building Knowledge Base...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="h-3.5 w-3.5" />
+                        <span>Build Knowledge Base</span>
+                      </>
+                    )}
+                  </button>
+                )}
+
                 {extractResults[activeFileId] && !chunkResults[activeFileId] && (
                   <button
                     onClick={() => {
@@ -799,7 +888,7 @@ export default function WorkspacePage() {
                       alert("Document is still processing or upload was not completed.");
                     }
                   }}
-                  className="w-full py-2.5 rounded-xl bg-red-650 hover:bg-red-700 text-white text-xs font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center gap-2 cursor-pointer border-0"
+                  className="w-full py-2.5 rounded-xl bg-red-655 hover:bg-red-700 text-white text-xs font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center gap-2 cursor-pointer border-0"
                 >
                   <FolderOpen className="h-4 w-4" />
                   <span>Open PDF</span>
@@ -848,7 +937,7 @@ export default function WorkspacePage() {
                       <div
                         className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 shadow-sm leading-relaxed whitespace-pre-wrap break-words ${
                           isUser
-                            ? "bg-violet-600 text-white rounded-tr-none"
+                            ? "bg-violet-650 text-white rounded-tr-none"
                             : "bg-slate-100 dark:bg-zinc-850 text-slate-800 dark:text-zinc-250 rounded-tl-none border border-slate-200/20 dark:border-zinc-800/30"
                         }`}
                       >
@@ -861,7 +950,7 @@ export default function WorkspacePage() {
                 {/* Animated Thinking Indicator */}
                 {analysisLoading && (
                   <div className="flex justify-start">
-                    <div className="bg-slate-100 dark:bg-zinc-850 text-slate-500 dark:text-zinc-455 rounded-2xl rounded-tl-none px-3.5 py-2.5 border border-slate-200/20 dark:border-zinc-800/30 shadow-sm flex items-center gap-2">
+                    <div className="bg-slate-100 dark:bg-zinc-855 text-slate-500 dark:text-zinc-455 rounded-2xl rounded-tl-none px-3.5 py-2.5 border border-slate-200/20 dark:border-zinc-800/30 shadow-sm flex items-center gap-2">
                       <div className="flex gap-1">
                         <span className="w-1.5 h-1.5 bg-slate-400 dark:bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: "0ms" }}></span>
                         <span className="w-1.5 h-1.5 bg-slate-400 dark:bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: "150ms" }}></span>
@@ -893,7 +982,7 @@ export default function WorkspacePage() {
                   <button
                     onClick={handleSendMessage}
                     disabled={analysisLoading || !currentInput.trim()}
-                    className="px-4 py-2 rounded-xl bg-violet-600 hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center min-w-[70px] h-9 cursor-pointer"
+                    className="px-4 py-2 rounded-xl bg-violet-650 hover:bg-violet-755 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center min-w-[70px] h-9 cursor-pointer"
                   >
                     Send
                   </button>

@@ -154,3 +154,162 @@ async def chunk_pdf_text(payload: PDFChunkRequestSchema):
         "chunks": chunks
     }
 
+import faiss
+import json
+import numpy as np
+from sentence_transformers import SentenceTransformer
+from app.schemas.index import PDFIndexRequestSchema, PDFIndexResponseSchema
+
+_embedding_model = None
+
+def get_embedding_model():
+    global _embedding_model
+    if _embedding_model is None:
+        _embedding_model = SentenceTransformer("BAAI/bge-small-en-v1.5")
+    return _embedding_model
+
+@router.post("/index", response_model=PDFIndexResponseSchema, status_code=status.HTTP_200_OK)
+async def index_pdf(payload: PDFIndexRequestSchema):
+    """
+    Generate text embeddings and compile a local FAISS index for the uploaded PDF.
+    Saves index and metadata list under uploads/vector_store/<pdf_id>/.
+    Skips generation if index already exists for the safe filename.
+    """
+    filename = payload.filename
+    safe_filename = os.path.basename(filename)
+    pdf_id = os.path.splitext(safe_filename)[0]
+    
+    pdf_path = Path(settings.UPLOAD_DIR) / "pdfs" / safe_filename
+    if not pdf_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="The requested PDF document was not found."
+        )
+
+    # Resolve vector store paths
+    vector_store_dir = Path(settings.UPLOAD_DIR) / "vector_store" / pdf_id
+    index_path = vector_store_dir / "faiss.index"
+    metadata_path = vector_store_dir / "metadata.json"
+
+    model_name = "BAAI/bge-small-en-v1.5"
+
+    # Check if index and metadata already exist
+    if index_path.exists() and metadata_path.exists():
+        try:
+            index = faiss.read_index(str(index_path))
+            return {
+                "success": True,
+                "embedding_model": model_name,
+                "vector_dimension": index.d,
+                "total_vectors": index.ntotal,
+                "index_location": f"uploads/vector_store/{pdf_id}/faiss.index",
+                "metadata_location": f"uploads/vector_store/{pdf_id}/metadata.json"
+            }
+        except Exception:
+            # If reading failed for some reason, proceed to regenerate
+            pass
+
+    # Re-extract and chunk text to generate index
+    try:
+        doc = fitz.open(str(pdf_path))
+        page_count = doc.page_count
+        
+        extracted_text_list = []
+        for page_num in range(page_count):
+            page = doc.load_page(page_num)
+            text = page.get_text("text") or ""
+            extracted_text_list.append(text)
+        doc.close()
+        
+        # Build chunks
+        chunks = []
+        chunk_index = 0
+        current_chunk_words = []
+        current_chunk_pages = set()
+        current_chunk_text_blocks = []
+        target_min_words = 500
+        target_max_words = 800
+
+        for idx, page_content in enumerate(extracted_text_list):
+            page_num = idx + 1
+            paragraphs = page_content.split("\n\n")
+            
+            for para in paragraphs:
+                para_stripped = para.strip()
+                if not para_stripped:
+                    continue
+                para_words = para_stripped.split()
+                para_word_count = len(para_words)
+                
+                current_word_count = len(current_chunk_words)
+                if current_word_count >= target_min_words and (current_word_count + para_word_count > target_max_words):
+                    chunk_text = "\n\n".join(current_chunk_text_blocks)
+                    pages_str = "-".join(map(str, sorted(current_chunk_pages)))
+                    
+                    chunks.append({
+                        "chunk_id": f"chunk_{chunk_index}",
+                        "page": pages_str or str(page_num),
+                        "text": chunk_text
+                    })
+                    
+                    chunk_index += 1
+                    current_chunk_words = []
+                    current_chunk_pages = set()
+                    current_chunk_text_blocks = []
+                    
+                current_chunk_words.extend(para_words)
+                current_chunk_pages.add(page_num)
+                current_chunk_text_blocks.append(para_stripped)
+
+        if current_chunk_text_blocks:
+            chunk_text = "\n\n".join(current_chunk_text_blocks)
+            pages_str = "-".join(map(str, sorted(current_chunk_pages)))
+            chunks.append({
+                "chunk_id": f"chunk_{chunk_index}",
+                "page": pages_str,
+                "text": chunk_text
+            })
+
+        if not chunks:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="PDF contains no valid text blocks to index."
+            )
+
+        # Generate embeddings using BAAI/bge-small-en-v1.5
+        model = get_embedding_model()
+        sentences = [c["text"] for c in chunks]
+        embeddings = model.encode(sentences, convert_to_numpy=True)
+        
+        dimension = int(embeddings.shape[1])
+        total_vectors = int(embeddings.shape[0])
+
+        # Compile FAISS Index
+        index = faiss.IndexFlatL2(dimension)
+        index.add(embeddings.astype("float32"))
+
+        # Save to vector store folder
+        vector_store_dir.mkdir(parents=True, exist_ok=True)
+        faiss.write_index(index, str(index_path))
+
+        with open(metadata_path, "w", encoding="utf-8") as f:
+            json.dump(chunks, f, ensure_ascii=False, indent=2)
+
+        return {
+            "success": True,
+            "embedding_model": model_name,
+            "vector_dimension": dimension,
+            "total_vectors": total_vectors,
+            "index_location": f"uploads/vector_store/{pdf_id}/faiss.index",
+            "metadata_location": f"uploads/vector_store/{pdf_id}/metadata.json"
+        }
+
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate embeddings and build FAISS index: {str(e)}"
+        )
+
+

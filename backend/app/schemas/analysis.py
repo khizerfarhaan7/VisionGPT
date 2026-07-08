@@ -1,12 +1,10 @@
 from pydantic import BaseModel
-from typing import List
 
 class ImageAnalysisRequestSchema(BaseModel):
     filename: str
+    user_prompt: str
 
 class ImageAnalysisResponseSchema(BaseModel):
     success: bool
-    caption: str
-    objects_detected: List[str]
-    ocr_text: str
+    answer: str
     confidence: float

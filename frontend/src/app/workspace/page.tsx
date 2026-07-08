@@ -34,9 +34,7 @@ interface RecentUpload {
 }
 
 interface AnalysisResult {
-  caption: string;
-  objects_detected: string[];
-  ocr_text: string;
+  answer: string;
   confidence: number;
   filename: string;
 }
@@ -50,6 +48,7 @@ export default function WorkspacePage() {
   // New modular states for visual AI analysis
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
+  const [userPrompts, setUserPrompts] = useState<Record<string, string>>({});
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -134,7 +133,7 @@ export default function WorkspacePage() {
     xhr.send(formData);
   };
 
-  const triggerAnalysis = async (savedName: string, originalName: string) => {
+  const triggerAnalysis = async (savedName: string, originalName: string, promptText: string) => {
     setAnalysisLoading(true);
     setAnalysisResult(null);
     try {
@@ -144,22 +143,20 @@ export default function WorkspacePage() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ filename: savedName }),
+        body: JSON.stringify({ filename: savedName, user_prompt: promptText }),
       });
       if (response.ok) {
         const data = await response.json();
         setAnalysisResult({
-          caption: data.caption,
-          objects_detected: data.objects_detected,
-          ocr_text: data.ocr_text,
+          answer: data.answer,
           confidence: data.confidence,
           filename: originalName
         });
       } else {
-        alert("Failed to analyze image file. Please verify model service status.");
+        alert("Failed to reason about the image file. Please verify model service status.");
       }
     } catch {
-      alert("Error contacting the vision analysis service.");
+      alert("Error contacting the vision reasoning service.");
     } finally {
       setAnalysisLoading(false);
     }
@@ -362,57 +359,76 @@ export default function WorkspacePage() {
                   return (
                     <div
                       key={`${file.name}-${idx}`}
-                      className="flex items-center justify-between p-3 rounded-2xl border border-slate-100 dark:border-zinc-850/80 bg-slate-50/50 dark:bg-zinc-950/40 text-xs shadow-sm hover:border-slate-200 dark:hover:border-zinc-800 transition-all"
+                      className="p-3.5 rounded-2xl border border-slate-100 dark:border-zinc-850 bg-slate-50/50 dark:bg-zinc-950/40 shadow-sm hover:border-slate-200 dark:hover:border-zinc-800 transition-all space-y-3"
                     >
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className="h-8.5 w-8.5 rounded-xl bg-violet-500/10 dark:bg-violet-400/10 flex items-center justify-center shrink-0">
-                          <Icon className="h-4.5 w-4.5 text-violet-600 dark:text-violet-400" />
-                        </div>
-                        <div className="min-w-0">
-                          <p className="font-semibold text-slate-700 dark:text-zinc-200 truncate max-w-[150px] sm:max-w-xs md:max-w-sm">{file.name}</p>
-                          <p className="text-[9px] text-slate-400 dark:text-zinc-500 uppercase">{file.type || 'unknown type'}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3 shrink-0">
-                        {file.status === "uploading" && (
-                          <div className="flex items-center gap-2">
-                            <div className="w-16 h-1.5 bg-slate-200 dark:bg-zinc-850 rounded-full overflow-hidden">
-                              <div 
-                                className="h-full bg-violet-500 transition-all duration-300" 
-                                style={{ width: `${file.progress}%` }}
-                              />
-                            </div>
-                            <span className="text-[10px] text-slate-400 dark:text-zinc-500 font-semibold">{file.progress}%</span>
+                      {/* Top Row: File Details */}
+                      <div className="flex items-center justify-between text-xs">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="h-8.5 w-8.5 rounded-xl bg-violet-500/10 dark:bg-violet-400/10 flex items-center justify-center shrink-0">
+                            <Icon className="h-4.5 w-4.5 text-violet-600 dark:text-violet-400" />
                           </div>
-                        )}
-                        {file.status === "success" && (
-                          <div className="flex items-center gap-2">
+                          <div className="min-w-0">
+                            <p className="font-semibold text-slate-700 dark:text-zinc-200 truncate max-w-[150px] sm:max-w-xs md:max-w-sm">{file.name}</p>
+                            <p className="text-[9px] text-slate-400 dark:text-zinc-500 uppercase">{file.type || 'unknown type'}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3 shrink-0">
+                          {file.status === "uploading" && (
+                            <div className="flex items-center gap-2">
+                              <div className="w-16 h-1.5 bg-slate-200 dark:bg-zinc-850 rounded-full overflow-hidden">
+                                <div 
+                                  className="h-full bg-violet-500 transition-all duration-300" 
+                                  style={{ width: `${file.progress}%` }}
+                                />
+                              </div>
+                              <span className="text-[10px] text-slate-400 dark:text-zinc-500 font-semibold">{file.progress}%</span>
+                            </div>
+                          )}
+                          {file.status === "success" && (
                             <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
                               Uploaded
                             </span>
-                            {file.type.startsWith("image/") && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  triggerAnalysis(file.savedName || file.name, file.name);
-                                }}
-                                disabled={analysisLoading}
-                                className="px-2 py-0.5 rounded-md bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white text-[9px] font-bold shadow-sm transition-all transform active:scale-95 cursor-pointer disabled:cursor-not-allowed"
-                              >
-                                Analyze
-                              </button>
-                            )}
-                          </div>
-                        )}
-                        {file.status === "error" && (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-semibold bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20">
-                            Failed
-                          </span>
-                        )}
-                        <p className="font-medium text-slate-500 dark:text-zinc-400 text-[11px] min-w-[50px] text-right">
-                          {formatBytes(file.size)}
-                        </p>
+                          )}
+                          {file.status === "error" && (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-semibold bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20">
+                              Failed
+                            </span>
+                          )}
+                          <p className="font-medium text-slate-500 dark:text-zinc-400 text-[11px] min-w-[50px] text-right">
+                            {formatBytes(file.size)}
+                          </p>
+                        </div>
                       </div>
+
+                      {/* Bottom Row: Prompt Input for Conversational Image Reasoning */}
+                      {file.status === "success" && file.type.startsWith("image/") && (
+                        <div className="flex flex-col sm:flex-row gap-2.5 pt-2 border-t border-slate-100 dark:border-zinc-900">
+                          <textarea
+                            value={userPrompts[file.id] || ""}
+                            onChange={(e) =>
+                              setUserPrompts((prev) => ({ ...prev, [file.id]: e.target.value }))
+                            }
+                            placeholder="Ask anything about this image..."
+                            rows={2}
+                            disabled={analysisLoading}
+                            className="flex-1 px-3 py-2 rounded-xl text-xs border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 focus:outline-none focus:ring-2 focus:ring-violet-500/30 resize-none disabled:opacity-60 disabled:cursor-not-allowed"
+                          />
+                          <button
+                            onClick={() => {
+                              const prompt = userPrompts[file.id]?.trim() || "";
+                              if (!prompt) {
+                                alert("Please enter a question to reason about the image.");
+                                return;
+                              }
+                              triggerAnalysis(file.savedName || file.name, file.name, prompt);
+                            }}
+                            disabled={analysisLoading || !(userPrompts[file.id]?.trim())}
+                            className="px-4 py-2 rounded-xl bg-violet-600 hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center self-end sm:self-stretch min-w-[70px] cursor-pointer"
+                          >
+                            <span>Send</span>
+                          </button>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -470,7 +486,7 @@ export default function WorkspacePage() {
                 {analysisResult && (
                   <button
                     onClick={() => setAnalysisResult(null)}
-                    className="text-slate-400 hover:text-slate-650 dark:hover:text-zinc-200 cursor-pointer"
+                    className="text-slate-400 hover:text-slate-655 dark:hover:text-zinc-200 cursor-pointer"
                   >
                     <X className="h-4 w-4" />
                   </button>
@@ -491,30 +507,9 @@ export default function WorkspacePage() {
                     </div>
 
                     <div>
-                      <p className="text-[10px] text-slate-400 dark:text-zinc-500 uppercase tracking-wider font-semibold">Visual Caption</p>
-                      <p className="mt-1 leading-relaxed text-slate-600 dark:text-zinc-300 bg-slate-50/50 dark:bg-zinc-950/40 p-2.5 rounded-xl border border-slate-100 dark:border-zinc-850/50">
-                        {analysisResult.caption}
-                      </p>
-                    </div>
-
-                    <div>
-                      <p className="text-[10px] text-slate-400 dark:text-zinc-500 uppercase tracking-wider font-semibold mb-1.5">Objects Detected</p>
-                      <div className="flex flex-wrap gap-1.5">
-                        {analysisResult.objects_detected.map((obj, i) => (
-                          <span
-                            key={i}
-                            className="px-2 py-0.5 rounded-md bg-violet-500/10 text-violet-650 dark:text-violet-400 border border-violet-500/20 text-[10px] font-medium animate-fade-in"
-                          >
-                            {obj}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div>
-                      <p className="text-[10px] text-slate-400 dark:text-zinc-500 uppercase tracking-wider font-semibold">Extracted OCR Text</p>
-                      <p className="mt-1 leading-relaxed font-mono text-[10px] text-slate-600 dark:text-zinc-300 bg-slate-50/50 dark:bg-zinc-950/40 p-2.5 rounded-xl border border-slate-100 dark:border-zinc-850/50 break-words">
-                        {analysisResult.ocr_text}
+                      <p className="text-[10px] text-slate-400 dark:text-zinc-500 uppercase tracking-wider font-semibold">AI Reasoning Answer</p>
+                      <p className="mt-1 leading-relaxed text-slate-600 dark:text-zinc-300 bg-slate-50/50 dark:bg-zinc-950/40 p-2.5 rounded-xl border border-slate-100 dark:border-zinc-850/50 whitespace-pre-wrap">
+                        {analysisResult.answer}
                       </p>
                     </div>
 

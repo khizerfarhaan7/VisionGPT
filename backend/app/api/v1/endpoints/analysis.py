@@ -12,7 +12,7 @@ router = APIRouter()
 @router.post("/image", response_model=ImageAnalysisResponseSchema, status_code=status.HTTP_200_OK)
 async def analyze_image(payload: ImageAnalysisRequestSchema):
     """
-    Perform visual reasoning, OCR extraction, and object detection on an uploaded image.
+    Perform conversational visual reasoning on an uploaded image with a user query.
     Uses Google Gemini Vision API via direct HTTP request.
     """
     # Print incoming request payload
@@ -35,7 +35,6 @@ async def analyze_image(payload: ImageAnalysisRequestSchema):
 
     # 2. Check API Key configuration
     api_key = settings.GEMINI_API_KEY
-    # Print whether GEMINI_API_KEY is loaded (only True/False)
     has_api_key = bool(api_key and api_key != "your_gemini_api_key_here")
     print(f"[DIAGNOSTIC] Whether GEMINI_API_KEY is loaded: {has_api_key}")
 
@@ -63,13 +62,22 @@ async def analyze_image(payload: ImageAnalysisRequestSchema):
     elif ext == ".webp":
         mime_type = "image/webp"
 
-    # 4. Construct request payload for Gemini API
+    # 4. Construct request payload for Gemini API with custom conversational prompt instructions
+    system_instruction = (
+        "You are VisionGPT.\n\n"
+        "Answer ONLY the user's question using the uploaded image.\n\n"
+        "If the answer cannot be determined from the image,\n"
+        "clearly say so.\n\n"
+        "Do not summarize unless requested.\n\n"
+        "Be concise and accurate."
+    )
+    
     prompt_text = (
-        "Analyze this image and return a JSON object with the following fields:\n"
-        "- 'caption': a concise description of what the image shows\n"
-        "- 'ocr_text': a single string containing any readable text/numbers found inside the image\n"
-        "- 'objects_detected': a list of key items, visual elements, or regions of interest detected\n"
-        "- 'confidence': a float value between 0.0 and 1.0 representing your overall analysis confidence.\n"
+        f"{system_instruction}\n\n"
+        f"User's Question: {payload.user_prompt}\n\n"
+        "Return your answer as a JSON object with the following fields:\n"
+        "- 'answer': your answer to the question\n"
+        "- 'confidence': a float value between 0.0 and 1.0 representing your estimated confidence in this answer.\n"
         "Do not wrap your answer in any markdown markup, backticks, or other formatting. Only return raw JSON."
     )
 
@@ -134,9 +142,7 @@ async def analyze_image(payload: ImageAnalysisRequestSchema):
             # Validate output fields and provide defaults if missing
             return {
                 "success": True,
-                "caption": str(parsed_result.get("caption", "No description available")),
-                "objects_detected": list(parsed_result.get("objects_detected", ["Image Asset"])),
-                "ocr_text": str(parsed_result.get("ocr_text", "")),
+                "answer": str(parsed_result.get("answer", "Could not analyze the image.")),
                 "confidence": float(parsed_result.get("confidence", 0.95))
             }
 

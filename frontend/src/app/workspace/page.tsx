@@ -23,6 +23,7 @@ interface SelectedFile {
   progress: number;
   status: "idle" | "uploading" | "success" | "error";
   savedName?: string;
+  pageCount?: number;
 }
 
 interface RecentUpload {
@@ -82,7 +83,10 @@ export default function WorkspacePage() {
   const startUpload = (fileObj: { id: string; file: File }) => {
     const xhr = new XMLHttpRequest();
     const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
-    const url = `${apiBaseUrl}/upload/image`;
+    
+    // Dynamically route based on type
+    const isPdf = fileObj.file.type === "application/pdf" || fileObj.file.name.toLowerCase().endsWith(".pdf");
+    const url = isPdf ? `${apiBaseUrl}/upload/pdf` : `${apiBaseUrl}/upload/image`;
 
     const formData = new FormData();
     formData.append("file", fileObj.file);
@@ -104,7 +108,13 @@ export default function WorkspacePage() {
           const fileUrl = `${backendRootUrl}/${res.path}`;
 
           setSelectedFiles((prev) =>
-            prev.map((f) => (f.id === fileObj.id ? { ...f, status: "success", progress: 100, savedName: res.filename } : f))
+            prev.map((f) => (f.id === fileObj.id ? { 
+              ...f, 
+              status: "success", 
+              progress: 100, 
+              savedName: res.filename,
+              pageCount: res.page_count 
+            } : f))
           );
 
           const newUpload: RecentUpload = {
@@ -112,7 +122,7 @@ export default function WorkspacePage() {
             name: res.original_name || fileObj.file.name,
             url: fileUrl,
             uploadTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            type: fileObj.file.type
+            type: fileObj.file.type || (isPdf ? "application/pdf" : "unknown")
           };
 
           setRecentUploads((prev) => {
@@ -163,8 +173,6 @@ export default function WorkspacePage() {
     setCurrentInput("");
 
     const userMessage: ChatMessage = { role: "user", content: userMessageContent };
-    
-    // Capture previous history to send to backend before appending new user message to state
     const previousHistory = chatHistories[activeFileId] || [];
 
     setChatHistories((prev) => ({
@@ -277,7 +285,7 @@ export default function WorkspacePage() {
       icon: FileText,
       description: "Documents, Reports, Articles",
       extensions: ".pdf",
-      color: "text-purple-500 bg-purple-500/10 border-purple-500/20"
+      color: "text-red-500 bg-red-500/10 border-red-500/20"
     },
     {
       title: "Audio",
@@ -415,7 +423,9 @@ export default function WorkspacePage() {
                         </div>
                         <div className="min-w-0">
                           <p className="font-semibold text-slate-700 dark:text-zinc-200 truncate max-w-[150px] sm:max-w-xs md:max-w-sm">{file.name}</p>
-                          <p className="text-[9px] text-slate-400 dark:text-zinc-500 uppercase">{file.type || 'unknown type'}</p>
+                          <p className="text-[9px] text-slate-400 dark:text-zinc-500 uppercase">
+                            {file.type || 'unknown type'} {file.pageCount !== undefined ? `• ${file.pageCount} page(s)` : ''}
+                          </p>
                         </div>
                       </div>
                       <div className="flex items-center gap-3 shrink-0">
@@ -449,6 +459,21 @@ export default function WorkspacePage() {
                                 }`}
                               >
                                 {activeFileId === file.id ? "Active Chat" : "Analyze"}
+                              </button>
+                            )}
+                            {(file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveFileId(file.id);
+                                }}
+                                className={`px-2.5 py-0.5 rounded-md text-[9px] font-bold shadow-sm transition-all transform active:scale-95 cursor-pointer ${
+                                  activeFileId === file.id
+                                    ? "bg-red-600 text-white"
+                                    : "bg-slate-200/80 hover:bg-slate-300/85 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300"
+                                }`}
+                              >
+                                {activeFileId === file.id ? "Viewing Info" : "Preview"}
                               </button>
                             )}
                           </div>
@@ -504,11 +529,73 @@ export default function WorkspacePage() {
 
         </div>
 
-        {/* Right Column: Recent Uploads & Conversational Chat Panel */}
+        {/* Right Column: Recent Uploads & Conversational Chat / PDF Preview Panel */}
         <div className="space-y-8">
           
+          {/* PDF Preview Card Display */}
+          {activeFileId && selectedFiles.find((f) => f.id === activeFileId)?.type === "application/pdf" && (
+            <motion.div
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 rounded-3xl p-6 shadow-sm space-y-6 flex flex-col"
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-zinc-800/50">
+                <div className="min-w-0">
+                  <h2 className="text-xs font-bold tracking-tight uppercase text-slate-500 dark:text-zinc-400">PDF Document</h2>
+                  <p className="text-[10px] text-slate-400 dark:text-zinc-500 truncate max-w-[180px]">
+                    {selectedFiles.find((f) => f.id === activeFileId)?.name}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setActiveFileId(null)}
+                  className="text-slate-400 hover:text-slate-650 dark:hover:text-zinc-200 cursor-pointer"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {/* PDF Preview details block */}
+              <div className="flex-1 flex flex-col items-center justify-center p-6 border border-slate-100 dark:border-zinc-850 bg-slate-50/50 dark:bg-zinc-950/40 rounded-2xl text-center space-y-4">
+                <div className="h-16 w-16 rounded-2xl bg-red-500/10 dark:bg-red-400/10 flex items-center justify-center border border-red-500/20">
+                  <FileText className="h-8 w-8 text-red-600 dark:text-red-400" />
+                </div>
+                
+                <div className="space-y-1 w-full px-2">
+                  <h3 className="text-xs font-bold truncate max-w-full text-slate-800 dark:text-zinc-200">
+                    {selectedFiles.find((f) => f.id === activeFileId)?.name}
+                  </h3>
+                  <p className="text-[10px] text-slate-400 dark:text-zinc-500">
+                    Size: {formatBytes(selectedFiles.find((f) => f.id === activeFileId)?.size || 0)}
+                  </p>
+                  <p className="text-[10px] text-slate-400 dark:text-zinc-500 font-semibold">
+                    Pages: {selectedFiles.find((f) => f.id === activeFileId)?.pageCount || "Unknown"}
+                  </p>
+                </div>
+              </div>
+
+              {/* Action Button: Open PDF */}
+              <button
+                onClick={() => {
+                  const target = selectedFiles.find((f) => f.id === activeFileId);
+                  if (target?.savedName) {
+                    const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+                    const backendRootUrl = apiBaseUrl.replace("/api/v1", "");
+                    window.open(`${backendRootUrl}/uploads/pdfs/${target.savedName}`, "_blank");
+                  } else {
+                    alert("Document is still processing or upload was not completed.");
+                  }
+                }}
+                className="w-full py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center gap-2 cursor-pointer border-0"
+              >
+                <FolderOpen className="h-4 w-4" />
+                <span>Open PDF</span>
+              </button>
+            </motion.div>
+          )}
+
           {/* Analysis Results Display as Conversational Chat */}
-          {activeFileId && (
+          {activeFileId && selectedFiles.find((f) => f.id === activeFileId)?.type.startsWith("image/") && (
             <motion.div
               initial={{ opacity: 0, y: 15 }}
               animate={{ opacity: 1, y: 0 }}
@@ -526,7 +613,7 @@ export default function WorkspacePage() {
                   onClick={() => {
                     setActiveFileId(null);
                   }}
-                  className="text-slate-400 hover:text-slate-650 dark:hover:text-zinc-200 cursor-pointer"
+                  className="text-slate-400 hover:text-slate-655 dark:hover:text-zinc-200 cursor-pointer"
                 >
                   <X className="h-4 w-4" />
                 </button>

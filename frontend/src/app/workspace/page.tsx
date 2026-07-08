@@ -12,7 +12,10 @@ import {
   ArrowRight,
   Sparkles,
   Info,
-  X
+  X,
+  Copy,
+  Download,
+  Search
 } from "lucide-react";
 
 interface SelectedFile {
@@ -73,6 +76,8 @@ interface PDFChatMessage {
     chunk_id: string;
     page: string;
     similarity_score: number;
+    start_time?: number;
+    end_time?: number;
   }[];
 }
 
@@ -81,7 +86,7 @@ export default function WorkspacePage() {
   const [selectedFiles, setSelectedFiles] = useState<SelectedFile[]>([]);
   const [recentUploads, setRecentUploads] = useState<RecentUpload[]>([]);
   const [previewImage, setPreviewImage] = useState<RecentUpload | null>(null);
-  
+
   // Conversational states for visual reasoning chat
   const [activeFileId, setActiveFileId] = useState<string | null>(null);
   const [chatHistories, setChatHistories] = useState<Record<string, ChatMessage[]>>({});
@@ -107,8 +112,54 @@ export default function WorkspacePage() {
   const [pdfChatInput, setPdfChatInput] = useState("");
   const [activePdfTab, setActivePdfTab] = useState<"chat" | "chunks">("chat");
 
+  // States for Audio transcription module
+  const [transcribeResults, setTranscribeResults] = useState<Record<string, string>>({});
+  const [transcribeMetrics, setTranscribeMetrics] = useState<Record<string, {
+    detected_language: string;
+    duration: number;
+    processing_time: number;
+    word_count: number;
+  }>>({});
+  const [transcribeChunks, setTranscribeChunks] = useState<Record<string, {
+    chunk_id: string;
+    start_time: number;
+    end_time: number;
+    text: string;
+  }[]>>({});
+  const [transcribeLoading, setTranscribeLoading] = useState(false);
+
+  // States for Audio RAG conversational chat module
+  const [audioChatHistories, setAudioChatHistories] = useState<Record<string, PDFChatMessage[]>>({});
+  const [audioChatLoading, setAudioChatLoading] = useState(false);
+  const [audioChatInput, setAudioChatInput] = useState("");
+  const [activeAudioTab, setActiveAudioTab] = useState<"chat" | "transcript">("chat");
+  const [transcriptSearch, setTranscriptSearch] = useState("");
+
+  // Toast notification state
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const showToast = (message: string) => {
+    setToastMessage(message);
+    setTimeout(() => {
+      setToastMessage((curr) => curr === message ? null : curr);
+    }, 3000);
+  };
+
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  const highlightText = (text: string, query: string) => {
+    if (!query) return text;
+    const parts = text.split(new RegExp(`(${query.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')})`, 'gi'));
+    return parts.map((part, i) =>
+      part.toLowerCase() === query.toLowerCase() ? (
+        <mark key={i} className="bg-emerald-500/20 text-emerald-600 dark:text-emerald-300 px-0.5 rounded font-semibold">{part}</mark>
+      ) : part
+    );
+  };
+
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const pdfChatScrollRef = useRef<HTMLDivElement>(null);
+  const audioChatScrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isUploading = selectedFiles.some((f) => f.status === "uploading");
@@ -126,6 +177,13 @@ export default function WorkspacePage() {
       pdfChatScrollRef.current.scrollTop = pdfChatScrollRef.current.scrollHeight;
     }
   }, [pdfChatHistories, pdfChatLoading, activePdfTab, activeFileId]);
+
+  // Scroll to bottom of Audio RAG chat history
+  useEffect(() => {
+    if (audioChatScrollRef.current) {
+      audioChatScrollRef.current.scrollTop = audioChatScrollRef.current.scrollHeight;
+    }
+  }, [audioChatHistories, audioChatLoading, activeAudioTab, activeFileId]);
 
   const toggleChunk = (chunkId: string) => {
     setExpandedChunks((prev) => ({ ...prev, [chunkId]: !prev[chunkId] }));
@@ -151,10 +209,21 @@ export default function WorkspacePage() {
   const startUpload = (fileObj: { id: string; file: File }) => {
     const xhr = new XMLHttpRequest();
     const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
-    
+
     // Dynamically route based on type
     const isPdf = fileObj.file.type === "application/pdf" || fileObj.file.name.toLowerCase().endsWith(".pdf");
-    const url = isPdf ? `${apiBaseUrl}/upload/pdf` : `${apiBaseUrl}/upload/image`;
+    const isAudio = fileObj.file.type.startsWith("audio/") ||
+      fileObj.file.name.toLowerCase().endsWith(".mp3") ||
+      fileObj.file.name.toLowerCase().endsWith(".wav") ||
+      fileObj.file.name.toLowerCase().endsWith(".m4a") ||
+      fileObj.file.name.toLowerCase().endsWith(".ogg") ||
+      fileObj.file.name.toLowerCase().endsWith(".mp4");
+
+    const url = isPdf
+      ? `${apiBaseUrl}/upload/pdf`
+      : isAudio
+        ? `${apiBaseUrl}/upload/audio`
+        : `${apiBaseUrl}/upload/image`;
 
     const formData = new FormData();
     formData.append("file", fileObj.file);
@@ -176,12 +245,12 @@ export default function WorkspacePage() {
           const fileUrl = `${backendRootUrl}/${res.path}`;
 
           setSelectedFiles((prev) =>
-            prev.map((f) => (f.id === fileObj.id ? { 
-              ...f, 
-              status: "success", 
-              progress: 100, 
+            prev.map((f) => (f.id === fileObj.id ? {
+              ...f,
+              status: "success",
+              progress: 100,
               savedName: res.filename,
-              pageCount: res.page_count 
+              pageCount: res.page_count
             } : f))
           );
 
@@ -228,6 +297,54 @@ export default function WorkspacePage() {
           { role: "assistant", content: `Hello! I am VisionGPT. Ask me anything about "${file.name}".` }
         ]
       }));
+    }
+  };
+
+  const triggerTranscription = async (savedName: string) => {
+    if (!activeFileId || transcribeLoading) return;
+    setTranscribeLoading(true);
+    try {
+      const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+      const response = await fetch(`${apiBaseUrl}/audio/transcribe`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ filename: savedName }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setTranscribeResults((prev) => ({
+          ...prev,
+          [activeFileId]: data.transcript,
+        }));
+        setTranscribeMetrics((prev) => ({
+          ...prev,
+          [activeFileId]: {
+            detected_language: data.detected_language,
+            duration: data.duration,
+            processing_time: data.processing_time,
+            word_count: data.word_count
+          }
+        }));
+        setTranscribeChunks((prev) => ({
+          ...prev,
+          [activeFileId]: data.chunks || []
+        }));
+        // Initialize chat history for this audio file
+        setAudioChatHistories((prev) => ({
+          ...prev,
+          [activeFileId]: [
+            { role: "assistant", content: "Hello! I have transcribed and indexed this audio. Ask me anything about the transcript." }
+          ]
+        }));
+      } else {
+        alert("Failed to transcribe audio. Please verify model service status.");
+      }
+    } catch {
+      alert("Error contacting the audio transcription service.");
+    } finally {
+      setTranscribeLoading(false);
     }
   };
 
@@ -320,7 +437,7 @@ export default function WorkspacePage() {
             metadata_location: data.metadata_location,
           }
         }));
-        
+
         // Auto-switch to chat tab and initialize welcome message
         setActivePdfTab("chat");
         setPdfChatHistories((prev) => ({
@@ -375,7 +492,7 @@ export default function WorkspacePage() {
       if (response.ok) {
         const data = await response.json();
         const assistantMessage: ChatMessage = { role: "assistant", content: data.answer };
-        
+
         setChatHistories((prev) => ({
           ...prev,
           [activeFileId]: [...(prev[activeFileId] || []), assistantMessage]
@@ -425,12 +542,12 @@ export default function WorkspacePage() {
 
       if (response.ok) {
         const data = await response.json();
-        const assistantMessage: PDFChatMessage = { 
-          role: "assistant", 
+        const assistantMessage: PDFChatMessage = {
+          role: "assistant",
           content: data.answer,
-          sources: data.sources 
+          sources: data.sources
         };
-        
+
         setPdfChatHistories((prev) => ({
           ...prev,
           [activeFileId]: [...(prev[activeFileId] || []), assistantMessage]
@@ -447,6 +564,63 @@ export default function WorkspacePage() {
     }
   };
 
+  const handleSendAudioMessage = async () => {
+    if (!activeFileId || !audioChatInput.trim() || audioChatLoading) return;
+
+    const targetFile = selectedFiles.find((f) => f.id === activeFileId);
+    if (!targetFile) return;
+
+    const userMessageContent = audioChatInput.trim();
+    setAudioChatInput("");
+
+    const userMessage: PDFChatMessage = { role: "user", content: userMessageContent };
+    const currentHistory = audioChatHistories[activeFileId] || [];
+
+    setAudioChatHistories((prev) => ({
+      ...prev,
+      [activeFileId]: [...(prev[activeFileId] || []), userMessage]
+    }));
+
+    setAudioChatLoading(true);
+
+    try {
+      const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+      const response = await fetch(`${apiBaseUrl}/audio/chat`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          filename: targetFile.savedName || targetFile.name,
+          question: userMessageContent,
+          history: currentHistory.map((m) => ({ role: m.role, content: m.content }))
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const assistantMessage: PDFChatMessage = {
+          role: "assistant",
+          content: data.answer,
+          sources: data.sources
+        };
+
+        setAudioChatHistories((prev) => ({
+          ...prev,
+          [activeFileId]: [...(prev[activeFileId] || []), assistantMessage]
+        }));
+      } else {
+        const errJson = await response.json();
+        const errMsg = errJson.detail || "Failed to process RAG chat response.";
+        alert(`RAG Error: ${errMsg}`);
+      }
+    } catch {
+      alert("Error contacting the Audio chat RAG service. Make sure Ollama LLM is running locally.");
+    } finally {
+      setAudioChatLoading(false);
+    }
+  };
+
   const handleFilesAdded = (files: File[]) => {
     // Preserve chat histories until new files are uploaded, then clear them
     setChatHistories({});
@@ -455,6 +629,11 @@ export default function WorkspacePage() {
     setIndexResults({});
     setPdfChatHistories({});
     setExpandedChunks({});
+    setTranscribeResults({});
+    setTranscribeMetrics({});
+    setTranscribeChunks({});
+    setTranscriptSearch("");
+    setAudioChatHistories({});
     setActiveFileId(null);
 
     const newFiles = files.map((file) => ({
@@ -528,8 +707,8 @@ export default function WorkspacePage() {
     {
       title: "Audio",
       icon: Music,
-      description: "MP3, WAV, M4A, AAC",
-      extensions: ".mp3, .wav, .m4a, .aac",
+      description: "MP3, WAV, M4A, OGG, MP4",
+      extensions: ".mp3, .wav, .m4a, .ogg, .mp4",
       color: "text-emerald-500 bg-emerald-500/10 border-emerald-500/20"
     },
     {
@@ -543,7 +722,7 @@ export default function WorkspacePage() {
 
   return (
     <main className="p-6 md:p-10 max-w-7xl mx-auto w-full space-y-10">
-      
+
       {/* Page Header */}
       <motion.div
         initial={{ opacity: 0, y: -15 }}
@@ -562,10 +741,10 @@ export default function WorkspacePage() {
       </motion.div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        
+
         {/* Left Column: Drag & Drop upload + File formats */}
         <div className="lg:col-span-2 space-y-8">
-          
+
           {/* 1. Large drag & drop upload area */}
           <motion.div
             initial={{ opacity: 0, scale: 0.98 }}
@@ -576,13 +755,11 @@ export default function WorkspacePage() {
             onDragLeave={handleDrag}
             onDrop={handleDrop}
             onClick={() => !isUploading && fileInputRef.current?.click()}
-            className={`relative rounded-3xl border-2 border-dashed p-10 md:p-12 transition-all duration-300 flex flex-col items-center justify-center text-center group ${
-              isUploading ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:border-slate-300 dark:hover:border-zinc-700 hover:bg-slate-50/50 dark:hover:bg-zinc-900/30"
-            } ${
-              isDragActive && !isUploading
+            className={`relative rounded-3xl border-2 border-dashed p-10 md:p-12 transition-all duration-300 flex flex-col items-center justify-center text-center group ${isUploading ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:border-slate-300 dark:hover:border-zinc-700 hover:bg-slate-50/50 dark:hover:bg-zinc-900/30"
+              } ${isDragActive && !isUploading
                 ? "border-violet-500 bg-violet-500/5 ring-4 ring-violet-500/5 scale-[1.01]"
                 : "border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20"
-            }`}
+              }`}
           >
             <input
               type="file"
@@ -595,12 +772,10 @@ export default function WorkspacePage() {
             />
             <div className="space-y-6 flex flex-col items-center">
               {/* Icon wrapper */}
-              <div className={`h-16 w-16 rounded-2xl bg-slate-50 dark:bg-zinc-900 border border-slate-100 dark:border-zinc-800 flex items-center justify-center shadow-sm transition-all duration-300 group-hover:scale-110 group-hover:border-violet-500/30 ${
-                isDragActive && !isUploading ? "border-violet-500/30 text-violet-500 bg-violet-50/20" : "text-slate-400"
-              }`}>
-                <UploadCloud className={`h-8 w-8 transition-transform duration-300 ${
-                  isDragActive && !isUploading ? "scale-110 text-violet-500" : "group-hover:-translate-y-1"
-                }`} />
+              <div className={`h-16 w-16 rounded-2xl bg-slate-50 dark:bg-zinc-900 border border-slate-100 dark:border-zinc-800 flex items-center justify-center shadow-sm transition-all duration-300 group-hover:scale-110 group-hover:border-violet-500/30 ${isDragActive && !isUploading ? "border-violet-500/30 text-violet-500 bg-violet-50/20" : "text-slate-400"
+                }`}>
+                <UploadCloud className={`h-8 w-8 transition-transform duration-300 ${isDragActive && !isUploading ? "scale-110 text-violet-500" : "group-hover:-translate-y-1"
+                  }`} />
               </div>
 
               <div className="space-y-2">
@@ -611,12 +786,11 @@ export default function WorkspacePage() {
               </div>
 
               {/* Upload Button */}
-              <button 
+              <button
                 onClick={handleButtonClick}
                 disabled={isUploading}
-                className={`relative inline-flex items-center gap-2 px-5 py-2 rounded-xl text-xs font-semibold text-white bg-gradient-to-tr from-violet-650 to-indigo-500 shadow-md shadow-violet-650/20 hover:shadow-lg hover:shadow-violet-650/25 transition-all transform active:scale-95 ${
-                  isUploading ? "opacity-50 cursor-not-allowed active:scale-100" : "cursor-pointer"
-                }`}
+                className={`relative inline-flex items-center gap-2 px-5 py-2 rounded-xl text-xs font-semibold text-white bg-gradient-to-tr from-violet-650 to-indigo-500 shadow-md shadow-violet-650/20 hover:shadow-lg hover:shadow-violet-650/25 transition-all transform active:scale-95 ${isUploading ? "opacity-50 cursor-not-allowed active:scale-100" : "cursor-pointer"
+                  }`}
               >
                 <span>{isUploading ? "Uploading..." : "Select Files"}</span>
                 <ArrowRight className="h-3.5 w-3.5" />
@@ -639,14 +813,13 @@ export default function WorkspacePage() {
                     if (!isUploading) setSelectedFiles([]);
                   }}
                   disabled={isUploading}
-                  className={`text-[10px] font-medium hover:underline transition-colors ${
-                    isUploading ? "text-slate-400 cursor-not-allowed" : "text-red-500 hover:text-red-650"
-                  }`}
+                  className={`text-[10px] font-medium hover:underline transition-colors ${isUploading ? "text-slate-400 cursor-not-allowed" : "text-red-500 hover:text-red-650"
+                    }`}
                 >
                   Clear All
                 </button>
               </div>
-              
+
               <div className="space-y-2.5 max-h-60 overflow-y-auto pr-1">
                 {selectedFiles.map((file, idx) => {
                   const Icon = getFileIcon(file.type);
@@ -670,8 +843,8 @@ export default function WorkspacePage() {
                         {file.status === "uploading" && (
                           <div className="flex items-center gap-2">
                             <div className="w-16 h-1.5 bg-slate-200 dark:bg-zinc-855 rounded-full overflow-hidden">
-                              <div 
-                                className="h-full bg-violet-500 transition-all duration-300" 
+                              <div
+                                className="h-full bg-violet-500 transition-all duration-300"
                                 style={{ width: `${file.progress}%` }}
                               />
                             </div>
@@ -690,11 +863,10 @@ export default function WorkspacePage() {
                                   handleAnalyzeClick(file);
                                 }}
                                 disabled={analysisLoading}
-                                className={`px-2.5 py-0.5 rounded-md text-[9px] font-bold shadow-sm transition-all transform active:scale-95 cursor-pointer disabled:cursor-not-allowed ${
-                                  activeFileId === file.id
-                                    ? "bg-violet-650 text-white"
-                                    : "bg-slate-200/80 hover:bg-slate-350/80 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300"
-                                }`}
+                                className={`px-2.5 py-0.5 rounded-md text-[9px] font-bold shadow-sm transition-all transform active:scale-95 cursor-pointer disabled:cursor-not-allowed ${activeFileId === file.id
+                                  ? "bg-violet-650 text-white"
+                                  : "bg-slate-200/80 hover:bg-slate-350/80 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300"
+                                  }`}
                               >
                                 {activeFileId === file.id ? "Active Chat" : "Analyze"}
                               </button>
@@ -705,15 +877,33 @@ export default function WorkspacePage() {
                                   e.stopPropagation();
                                   setActiveFileId(file.id);
                                 }}
-                                className={`px-2.5 py-0.5 rounded-md text-[9px] font-bold shadow-sm transition-all transform active:scale-95 cursor-pointer ${
-                                  activeFileId === file.id
-                                    ? "bg-red-650 text-white"
-                                    : "bg-slate-200/80 hover:bg-slate-300/85 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300"
-                                }`}
+                                className={`px-2.5 py-0.5 rounded-md text-[9px] font-bold shadow-sm transition-all transform active:scale-95 cursor-pointer ${activeFileId === file.id
+                                  ? "bg-red-650 text-white"
+                                  : "bg-slate-200/80 hover:bg-slate-300/85 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300"
+                                  }`}
                               >
                                 {activeFileId === file.id ? "Viewing Info" : "Preview"}
                               </button>
                             )}
+                            {(file.type.startsWith("audio/") ||
+                              file.name.toLowerCase().endsWith(".mp3") ||
+                              file.name.toLowerCase().endsWith(".wav") ||
+                              file.name.toLowerCase().endsWith(".m4a") ||
+                              file.name.toLowerCase().endsWith(".ogg") ||
+                              file.name.toLowerCase().endsWith(".mp4")) && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setActiveFileId(file.id);
+                                  }}
+                                  className={`px-2.5 py-0.5 rounded-md text-[9px] font-bold shadow-sm transition-all transform active:scale-95 cursor-pointer ${activeFileId === file.id
+                                    ? "bg-emerald-600 text-white"
+                                    : "bg-slate-200/80 hover:bg-slate-300/85 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300"
+                                    }`}
+                                >
+                                  {activeFileId === file.id ? "Viewing Audio" : "Preview"}
+                                </button>
+                              )}
                           </div>
                         )}
                         {file.status === "error" && (
@@ -743,7 +933,7 @@ export default function WorkspacePage() {
               <Info className="h-4.5 w-4.5 text-violet-500" />
               <h2 className="text-sm font-bold tracking-tight">Supported File Formats</h2>
             </div>
-            
+
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               {fileTypes.map((type) => {
                 const Icon = type.icon;
@@ -769,7 +959,7 @@ export default function WorkspacePage() {
 
         {/* Right Column: Recent Uploads & Conversational Chat / PDF Preview Panel */}
         <div className="space-y-8">
-          
+
           {/* PDF Preview Card Display */}
           {activeFileId && selectedFiles.find((f) => f.id === activeFileId)?.type === "application/pdf" && (
             <motion.div
@@ -796,7 +986,7 @@ export default function WorkspacePage() {
               {/* PDF Preview details block / Scrollable Text / Chunk Viewer */}
               {chunkResults[activeFileId] ? (
                 <div className="flex-1 flex flex-col min-h-0 space-y-4 animate-fade-in">
-                  
+
                   {/* Index Status Panel */}
                   {indexResults[activeFileId] ? (
                     <div className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-[10px] space-y-2.5">
@@ -830,21 +1020,19 @@ export default function WorkspacePage() {
                     <div className="flex border-b border-slate-100 dark:border-zinc-800">
                       <button
                         onClick={() => setActivePdfTab("chat")}
-                        className={`flex-1 pb-2 text-xs font-bold text-center border-b-2 transition-colors cursor-pointer ${
-                          activePdfTab === "chat"
-                            ? "border-red-500 text-slate-800 dark:text-zinc-150"
-                            : "border-transparent text-slate-400 dark:text-zinc-500"
-                        }`}
+                        className={`flex-1 pb-2 text-xs font-bold text-center border-b-2 transition-colors cursor-pointer ${activePdfTab === "chat"
+                          ? "border-red-500 text-slate-800 dark:text-zinc-150"
+                          : "border-transparent text-slate-400 dark:text-zinc-500"
+                          }`}
                       >
                         Ask Document
                       </button>
                       <button
                         onClick={() => setActivePdfTab("chunks")}
-                        className={`flex-1 pb-2 text-xs font-bold text-center border-b-2 transition-colors cursor-pointer ${
-                          activePdfTab === "chunks"
-                            ? "border-red-500 text-slate-800 dark:text-zinc-150"
-                            : "border-transparent text-slate-400 dark:text-zinc-500"
-                        }`}
+                        className={`flex-1 pb-2 text-xs font-bold text-center border-b-2 transition-colors cursor-pointer ${activePdfTab === "chunks"
+                          ? "border-red-500 text-slate-800 dark:text-zinc-150"
+                          : "border-transparent text-slate-400 dark:text-zinc-500"
+                          }`}
                       >
                         Browse Chunks
                       </button>
@@ -867,9 +1055,8 @@ export default function WorkspacePage() {
                               <span className="uppercase tracking-wider font-bold text-violet-600 dark:text-violet-400">{chunk.chunk_id}</span>
                               <span>Page(s): {chunk.page} • {chunk.text.length} chars</span>
                             </div>
-                            <p className={`text-[11px] leading-relaxed text-slate-600 dark:text-zinc-350 ${
-                              isExpanded ? "whitespace-pre-wrap font-mono text-[10px] bg-slate-100/50 dark:bg-zinc-955/50 p-2 rounded-xl border border-slate-200/30 dark:border-zinc-900/30" : "truncate"
-                            }`}>
+                            <p className={`text-[11px] leading-relaxed text-slate-600 dark:text-zinc-350 ${isExpanded ? "whitespace-pre-wrap font-mono text-[10px] bg-slate-100/50 dark:bg-zinc-955/50 p-2 rounded-xl border border-slate-200/30 dark:border-zinc-900/30" : "truncate"
+                              }`}>
                               {isExpanded ? chunk.text : `${chunk.text.slice(0, 150)}${chunk.text.length > 150 ? '...' : ''}`}
                             </p>
                           </div>
@@ -892,15 +1079,14 @@ export default function WorkspacePage() {
                               className={`flex flex-col ${isUser ? "items-end" : "items-start"}`}
                             >
                               <div
-                                className={`max-w-[85%] rounded-2xl px-3 py-2 shadow-sm leading-relaxed whitespace-pre-wrap break-words ${
-                                  isUser
-                                    ? "bg-red-650 text-white rounded-tr-none"
-                                    : "bg-slate-100 dark:bg-zinc-850 text-slate-800 dark:text-zinc-250 rounded-tl-none border border-slate-200/20 dark:border-zinc-800/30"
-                                }`}
+                                className={`max-w-[85%] rounded-2xl px-3 py-2 shadow-sm leading-relaxed whitespace-pre-wrap break-words ${isUser
+                                  ? "bg-red-650 text-white rounded-tr-none"
+                                  : "bg-slate-100 dark:bg-zinc-850 text-slate-800 dark:text-zinc-250 rounded-tl-none border border-slate-200/20 dark:border-zinc-800/30"
+                                  }`}
                               >
                                 {msg.content}
                               </div>
-                              
+
                               {/* Sources list details */}
                               {!isUser && msg.sources && msg.sources.length > 0 && (
                                 <div className="mt-1 flex flex-wrap gap-1 px-1">
@@ -949,7 +1135,7 @@ export default function WorkspacePage() {
                         >
                           Clear
                         </button>
-                        
+
                         <input
                           value={pdfChatInput}
                           onChange={(e) => setPdfChatInput(e.target.value)}
@@ -963,7 +1149,7 @@ export default function WorkspacePage() {
                           disabled={pdfChatLoading}
                           className="flex-1 px-3 py-2 rounded-xl text-[11px] border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 focus:outline-none focus:ring-2 focus:ring-red-500/30 disabled:opacity-60 disabled:cursor-not-allowed h-9"
                         />
-                        
+
                         <button
                           onClick={handleSendPdfMessage}
                           disabled={pdfChatLoading || !pdfChatInput.trim()}
@@ -1005,7 +1191,7 @@ export default function WorkspacePage() {
                   <div className="h-16 w-16 rounded-2xl bg-red-500/10 dark:bg-red-400/10 flex items-center justify-center border border-red-500/20">
                     <FileText className="h-8 w-8 text-red-650 dark:text-red-400" />
                   </div>
-                  
+
                   <div className="space-y-1 w-full px-2">
                     <h3 className="text-xs font-bold truncate max-w-full text-slate-800 dark:text-zinc-200">
                       {selectedFiles.find((f) => f.id === activeFileId)?.name}
@@ -1114,6 +1300,405 @@ export default function WorkspacePage() {
             </motion.div>
           )}
 
+          {/* Audio Preview Card Display */}
+          {activeFileId && selectedFiles.find((f) => {
+            const file = f;
+            return file.id === activeFileId && (
+              file.type.startsWith("audio/") ||
+              file.name.toLowerCase().endsWith(".mp3") ||
+              file.name.toLowerCase().endsWith(".wav") ||
+              file.name.toLowerCase().endsWith(".m4a") ||
+              file.name.toLowerCase().endsWith(".ogg") ||
+              file.name.toLowerCase().endsWith(".mp4")
+            );
+          }) && (
+              <motion.div
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 rounded-3xl p-6 shadow-sm space-y-5 flex flex-col animate-fade-in"
+              >
+                {/* Header */}
+                <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-zinc-800/50">
+                  <div className="min-w-0">
+                    <h2 className="text-xs font-bold tracking-tight uppercase text-slate-500 dark:text-zinc-400">Audio Intelligence</h2>
+                    <p className="text-[10px] text-slate-400 dark:text-zinc-500 truncate max-w-[180px]">
+                      {selectedFiles.find((f) => f.id === activeFileId)?.name}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setActiveFileId(null)}
+                    className="text-slate-400 hover:text-slate-650 dark:hover:text-zinc-200 cursor-pointer"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+
+                {/* Audio Details / Player Cover */}
+                <div className="flex flex-col items-center justify-center p-4 border border-slate-100 dark:border-zinc-855 bg-slate-50/50 dark:bg-zinc-950/40 rounded-2xl text-center space-y-3">
+                  <div className="h-12 w-12 rounded-2xl bg-emerald-500/10 dark:bg-emerald-400/10 flex items-center justify-center border border-emerald-500/20 shrink-0">
+                    <Music className="h-6 w-6 text-emerald-600 dark:text-emerald-400" />
+                  </div>
+
+                  <div className="space-y-0.5 w-full px-2">
+                    <h3 className="text-xs font-bold truncate max-w-full text-slate-800 dark:text-zinc-200">
+                      {selectedFiles.find((f) => f.id === activeFileId)?.name}
+                    </h3>
+                    <p className="text-[9px] text-slate-400 dark:text-zinc-500">
+                      Size: {formatBytes(selectedFiles.find((f) => f.id === activeFileId)?.size || 0)}
+                    </p>
+                  </div>
+
+                  {/* HTML5 Audio/Video Player */}
+                  {selectedFiles.find((f) => f.id === activeFileId)?.savedName && (
+                    selectedFiles.find((f) => f.id === activeFileId)?.name.toLowerCase().endsWith(".mp4") ? (
+                      <video
+                        ref={videoRef}
+                        src={`${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1").replace("/api/v1", "")}/uploads/audio/${selectedFiles.find((f) => f.id === activeFileId)?.savedName}`}
+                        controls
+                        className="w-full max-h-36 rounded-xl mt-1 bg-black focus:outline-none"
+                      />
+                    ) : (
+                      <audio
+                        ref={audioRef}
+                        src={`${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1").replace("/api/v1", "")}/uploads/audio/${selectedFiles.find((f) => f.id === activeFileId)?.savedName}`}
+                        controls
+                        className="w-full h-10 mt-1 focus:outline-none"
+                      />
+                    )
+                  )}
+                </div>
+
+                {/* Transcription & RAG Chat Layout */}
+                {transcribeResults[activeFileId] ? (
+                  <div className="flex-1 flex flex-col min-h-0 space-y-4">
+                    {/* Metrics Grid */}
+                    {transcribeMetrics[activeFileId] && (
+                      <div className="grid grid-cols-4 gap-2 text-center">
+                        <div className="p-2 rounded-xl bg-slate-50 dark:bg-zinc-955/40 border border-slate-100 dark:border-zinc-850">
+                          <p className="text-[8px] text-slate-400 dark:text-zinc-500 font-medium">Language</p>
+                          <p className="text-[10px] font-bold text-slate-700 dark:text-zinc-250 uppercase">{transcribeMetrics[activeFileId].detected_language}</p>
+                        </div>
+                        <div className="p-2 rounded-xl bg-slate-50 dark:bg-zinc-955/40 border border-slate-100 dark:border-zinc-850">
+                          <p className="text-[8px] text-slate-400 dark:text-zinc-500 font-medium">Duration</p>
+                          <p className="text-[10px] font-bold text-slate-700 dark:text-zinc-255 text-center">
+                            {Math.floor(transcribeMetrics[activeFileId].duration / 60)}:
+                            {Math.floor(transcribeMetrics[activeFileId].duration % 60).toString().padStart(2, "0")}
+                          </p>
+                        </div>
+                        <div className="p-2 rounded-xl bg-slate-50 dark:bg-zinc-955/40 border border-slate-100 dark:border-zinc-850">
+                          <p className="text-[8px] text-slate-400 dark:text-zinc-500 font-medium">Time Taken</p>
+                          <p className="text-[10px] font-bold text-slate-700 dark:text-zinc-255">{transcribeMetrics[activeFileId].processing_time}s</p>
+                        </div>
+                        <div className="p-2 rounded-xl bg-slate-50 dark:bg-zinc-955/40 border border-slate-100 dark:border-zinc-850">
+                          <p className="text-[8px] text-slate-400 dark:text-zinc-500 font-medium">Words</p>
+                          <p className="text-[10px] font-bold text-slate-700 dark:text-zinc-255">{transcribeMetrics[activeFileId].word_count}</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Tabs Switcher for Chat with Audio vs Transcript View */}
+                    <div className="flex border-b border-slate-100 dark:border-zinc-800">
+                      <button
+                        onClick={() => setActiveAudioTab("chat")}
+                        className={`flex-1 pb-2 text-xs font-bold text-center border-b-2 transition-colors cursor-pointer ${activeAudioTab === "chat"
+                          ? "border-emerald-500 text-slate-800 dark:text-zinc-150"
+                          : "border-transparent text-slate-400 dark:text-zinc-500"
+                          }`}
+                      >
+                        Chat with Audio
+                      </button>
+                      <button
+                        onClick={() => setActiveAudioTab("transcript")}
+                        className={`flex-1 pb-2 text-xs font-bold text-center border-b-2 transition-colors cursor-pointer ${activeAudioTab === "transcript"
+                          ? "border-emerald-500 text-slate-800 dark:text-zinc-150"
+                          : "border-transparent text-slate-400 dark:text-zinc-500"
+                          }`}
+                      >
+                        View Transcript
+                      </button>
+                    </div>
+
+                    {/* Tab View Contents */}
+                    {activeAudioTab === "transcript" ? (
+                      <div className="flex-1 flex flex-col min-h-0 space-y-3">
+                        {/* Top Action Bar */}
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold text-slate-550 dark:text-zinc-400 uppercase tracking-wider">Timeline Transcript</span>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => {
+                                if (transcribeResults[activeFileId]) {
+                                  navigator.clipboard.writeText(transcribeResults[activeFileId]);
+                                  showToast("Transcript copied successfully.");
+                                }
+                              }}
+                              className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-zinc-800 text-slate-700 dark:text-zinc-300 bg-white dark:bg-zinc-900 hover:bg-slate-50 text-[10px] font-bold shadow-sm transition-all transform active:scale-95 flex items-center gap-1 cursor-pointer"
+                            >
+                              <Copy className="h-3 w-3 text-emerald-600" />
+                              <span>Copy</span>
+                            </button>
+                            <button
+                              onClick={() => {
+                                if (transcribeResults[activeFileId]) {
+                                  const element = document.createElement("a");
+                                  const file = new Blob([transcribeResults[activeFileId]], { type: "text/plain;charset=utf-8" });
+                                  element.href = URL.createObjectURL(file);
+                                  const originalName = selectedFiles.find((f) => f.id === activeFileId)?.name || "transcript";
+                                  element.download = `${originalName.substring(0, originalName.lastIndexOf('.')) || originalName}_transcript.txt`;
+                                  document.body.appendChild(element);
+                                  element.click();
+                                  document.body.removeChild(element);
+                                  showToast("Transcript downloaded successfully.");
+                                }
+                              }}
+                              className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-zinc-800 text-slate-700 dark:text-zinc-300 bg-white dark:bg-zinc-900 hover:bg-slate-50 text-[10px] font-bold shadow-sm transition-all transform active:scale-95 flex items-center gap-1 cursor-pointer"
+                            >
+                              <Download className="h-3 w-3 text-emerald-600" />
+                              <span>Download</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Transcript Search Input */}
+                        <div className="relative">
+                          <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400 dark:text-zinc-555" />
+                          <input
+                            type="text"
+                            placeholder="Search transcript..."
+                            value={transcriptSearch}
+                            onChange={(e) => setTranscriptSearch(e.target.value)}
+                            className="w-full pl-8.5 pr-8 py-1.5 rounded-xl text-[10px] border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/50 transition-all font-sans"
+                          />
+                          {transcriptSearch && (
+                            <button
+                              onClick={() => setTranscriptSearch("")}
+                              className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-650 cursor-pointer border-0 bg-transparent p-0 flex items-center"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="flex-1 min-h-[140px] max-h-[220px] overflow-y-auto space-y-3 pr-1 text-xs">
+                          {(() => {
+                            const chunks = transcribeChunks[activeFileId] || [];
+                            const filtered = transcriptSearch
+                              ? chunks.filter((c) => c.text.toLowerCase().includes(transcriptSearch.toLowerCase()))
+                              : chunks;
+
+                            if (transcriptSearch && filtered.length === 0) {
+                              return (
+                                <div className="text-center p-8 text-slate-400 dark:text-zinc-500 text-[10px] font-semibold bg-slate-50/50 dark:bg-zinc-950/20 rounded-2xl border border-slate-100 dark:border-zinc-900">
+                                  No matching segments found for <strong>{transcriptSearch}</strong>
+                                </div>
+                              );
+                            }
+
+                            if (filtered.length > 0) {
+                              return filtered.map((chunk) => {
+                                const formatTime = (secs: number) => {
+                                  const m = Math.floor(secs / 60);
+                                  const sec = Math.floor(secs % 60);
+                                  return `${m.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
+                                };
+                                return (
+                                  <div
+                                    key={chunk.chunk_id}
+                                    onClick={() => {
+                                      const player = videoRef.current ?? audioRef.current;
+
+                                      if (player) {
+                                        player.currentTime = chunk.start_time;
+                                        player.play().catch(() => { });
+                                      }
+                                    }}
+                                    className="flex gap-4 p-3.5 rounded-2xl border border-slate-100 dark:border-zinc-855 bg-slate-50/50 dark:bg-zinc-950/40 hover:bg-emerald-500/[0.03] dark:hover:bg-emerald-500/[0.05] hover:border-emerald-500/20 hover:shadow-sm cursor-pointer select-text transition-all active:scale-[0.99]"
+                                  >
+                                    <span className="font-mono text-[10px] font-bold text-emerald-600 dark:text-emerald-400 select-none shrink-0 align-top mt-0.5">
+                                      {formatTime(chunk.start_time)}
+                                    </span>
+                                    <p className="text-[11px] leading-relaxed text-slate-600 dark:text-zinc-355 font-sans whitespace-pre-wrap break-words flex-1">
+                                      {highlightText(chunk.text, transcriptSearch)}
+                                    </p>
+                                  </div>
+                                );
+                              });
+                            }
+
+                            return (
+                              <div className="p-3.5 rounded-xl border border-slate-150 dark:border-zinc-855 bg-slate-50/50 dark:bg-zinc-950/40 font-mono text-[10px] text-slate-600 dark:text-zinc-350 leading-normal whitespace-pre-wrap break-words">
+                                {transcribeResults[activeFileId]}
+                              </div>
+                            );
+                          })()}
+                        </div>
+
+                        {/* Action buttons: Copy & Download */}
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(transcribeResults[activeFileId]);
+                              showToast("Transcript copied successfully.");
+                            }}
+                            className="flex-1 py-2 rounded-xl border border-slate-200 dark:border-zinc-800 text-slate-700 dark:text-zinc-300 bg-white dark:bg-zinc-900 hover:bg-slate-50 text-[10px] font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer border-0"
+                          >
+                            <Copy className="h-3.5 w-3.5" />
+                            <span>Copy Transcript</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              const element = document.createElement("a");
+                              const file = new Blob([transcribeResults[activeFileId]], { type: "text/plain;charset=utf-8" });
+                              element.href = URL.createObjectURL(file);
+                              const originalName = selectedFiles.find((f) => f.id === activeFileId)?.name || "transcript";
+                              element.download = `${originalName.substring(0, originalName.lastIndexOf('.')) || originalName}_transcript.txt`;
+                              document.body.appendChild(element);
+                              element.click();
+                              document.body.removeChild(element);
+                              showToast("Transcript downloaded successfully.");
+                            }}
+                            className="flex-1 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer border-0"
+                          >
+                            <Download className="h-3.5 w-3.5" />
+                            <span>Download .txt</span>
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      /* Audio Chat Interface View */
+                      <div className="flex flex-col flex-1 min-h-0 space-y-3.5">
+                        <div
+                          ref={audioChatScrollRef}
+                          className="flex-1 overflow-y-auto space-y-3.5 pr-1 text-xs scroll-smooth max-h-[280px] min-h-[140px]"
+                        >
+                          {(audioChatHistories[activeFileId] || []).map((msg, idx) => {
+                            const isUser = msg.role === "user";
+                            return (
+                              <div
+                                key={idx}
+                                className={`flex flex-col ${isUser ? "items-end" : "items-start"}`}
+                              >
+                                <div
+                                  className={`max-w-[85%] shadow-sm leading-relaxed whitespace-pre-wrap break-words ${isUser
+                                    ? "bg-gradient-to-br from-emerald-500 to-teal-600 dark:from-emerald-600 dark:to-teal-700 text-white rounded-2xl rounded-tr-none px-4 py-2.5 border-0 select-text"
+                                    : "bg-slate-50 dark:bg-zinc-850/60 backdrop-blur-sm text-slate-800 dark:text-zinc-200 rounded-2xl rounded-tl-none border border-slate-100 dark:border-zinc-800/40 px-4 py-2.5 select-text"
+                                    }`}
+                                >
+                                  {msg.content}
+                                </div>
+
+                                {/* Sources display */}
+                                {!isUser && msg.sources && msg.sources.length > 0 && (
+                                  <div className="mt-1 flex flex-wrap gap-1.5 px-1 items-center">
+                                    <span className="text-[8px] text-slate-400 dark:text-zinc-500 font-semibold self-center">Sources:</span>
+                                    {msg.sources.map((s, sIdx) => {
+                                      const formatTime = (secs?: number) => {
+                                        if (secs === undefined) return "";
+                                        const m = Math.floor(secs / 60);
+                                        const sec = Math.floor(secs % 60);
+                                        return `${m}:${sec.toString().padStart(2, "0")}`;
+                                      };
+                                      return (
+                                        <span
+                                          key={sIdx}
+                                          className="inline-flex items-center px-2 py-0.5 rounded-full text-[8px] font-bold bg-slate-100 dark:bg-zinc-800/80 hover:bg-emerald-500/10 dark:hover:bg-emerald-500/15 hover:text-emerald-600 dark:hover:text-emerald-400 text-slate-500 dark:text-zinc-400 border border-slate-200/50 dark:border-zinc-800/50 cursor-default transition-all"
+                                        >
+                                          {s.chunk_id} {s.start_time !== undefined && s.end_time !== undefined ? `(${formatTime(s.start_time)} - ${formatTime(s.end_time)})` : `(${s.page})`}
+                                        </span>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+
+                          {/* Typing indicator */}
+                          {audioChatLoading && (
+                            <div className="flex justify-start">
+                              <div className="bg-slate-100 dark:bg-zinc-850/80 backdrop-blur-sm text-slate-500 dark:text-zinc-400 rounded-2xl rounded-tl-none px-4 py-2 border border-slate-200/20 dark:border-zinc-800/20 shadow-sm flex items-center gap-2">
+                                <div className="flex gap-1">
+                                  <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-bounce" style={{ animationDelay: "0ms" }}></span>
+                                  <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-bounce" style={{ animationDelay: "150ms" }}></span>
+                                  <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-bounce" style={{ animationDelay: "300ms" }}></span>
+                                </div>
+                                <span className="text-[9px] font-semibold italic">VisionGPT is typing...</span>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Input & Clear */}
+                        <div className="pt-2 border-t border-slate-100 dark:border-zinc-855 flex gap-2 items-center">
+                          <button
+                            onClick={() => {
+                              setAudioChatHistories((prev) => ({
+                                ...prev,
+                                [activeFileId]: [
+                                  { role: "assistant", content: "Chat cleared. Ask me anything about the transcript!" }
+                                ]
+                              }));
+                            }}
+                            className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 hover:text-red-500 text-slate-600 dark:text-zinc-300 text-[10px] font-bold transition-all shrink-0 cursor-pointer border-0 shadow-sm"
+                          >
+                            Clear
+                          </button>
+
+                          <input
+                            value={audioChatInput}
+                            onChange={(e) => setAudioChatInput(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && !e.shiftKey) {
+                                e.preventDefault();
+                                handleSendAudioMessage();
+                              }
+                            }}
+                            placeholder="Ask about this audio..."
+                            disabled={audioChatLoading}
+                            className="flex-1 px-3 py-2.5 rounded-xl text-[11px] border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 disabled:opacity-60 transition-all"
+                          />
+
+                          <button
+                            onClick={handleSendAudioMessage}
+                            disabled={audioChatLoading || !audioChatInput.trim()}
+                            className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-[10px] font-bold shadow-md hover:shadow-emerald-500/20 hover:shadow-lg transition-all transform active:scale-95 shrink-0 flex items-center justify-center cursor-pointer border-0"
+                          >
+                            Send
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  /* Action Button: Transcribe Audio */
+                  <div className="space-y-2.5">
+                    <button
+                      onClick={() => {
+                        const target = selectedFiles.find((f) => f.id === activeFileId);
+                        if (target?.savedName) {
+                          triggerTranscription(target.savedName);
+                        }
+                      }}
+                      disabled={transcribeLoading}
+                      className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center gap-2 cursor-pointer border-0 disabled:cursor-not-allowed"
+                    >
+                      {transcribeLoading ? (
+                        <>
+                          <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                          <span>Transcribing Audio...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="h-3.5 w-3.5" />
+                          <span>Transcribe Audio</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
+              </motion.div>
+            )}
+
           {/* Analysis Results Display as Conversational Chat */}
           {activeFileId && selectedFiles.find((f) => f.id === activeFileId)?.type.startsWith("image/") && (
             <motion.div
@@ -1140,7 +1725,7 @@ export default function WorkspacePage() {
               </div>
 
               {/* Chat Message Scrollable Area */}
-              <div 
+              <div
                 ref={chatScrollRef}
                 className="flex-1 overflow-y-auto p-4 space-y-4 text-xs scroll-smooth"
               >
@@ -1152,11 +1737,10 @@ export default function WorkspacePage() {
                       className={`flex ${isUser ? "justify-end" : "justify-start"}`}
                     >
                       <div
-                        className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 shadow-sm leading-relaxed whitespace-pre-wrap break-words ${
-                          isUser
-                            ? "bg-violet-600 text-white rounded-tr-none"
-                            : "bg-slate-100 dark:bg-zinc-850 text-slate-800 dark:text-zinc-250 rounded-tl-none border border-slate-200/20 dark:border-zinc-800/30"
-                        }`}
+                        className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 shadow-sm leading-relaxed whitespace-pre-wrap break-words ${isUser
+                          ? "bg-violet-600 text-white rounded-tr-none"
+                          : "bg-slate-100 dark:bg-zinc-850 text-slate-800 dark:text-zinc-250 rounded-tl-none border border-slate-200/20 dark:border-zinc-800/30"
+                          }`}
                       >
                         {msg.content}
                       </div>
@@ -1216,7 +1800,7 @@ export default function WorkspacePage() {
             className="space-y-4"
           >
             <h2 className="text-sm font-bold tracking-tight">Recent Uploads</h2>
-            
+
             {recentUploads.length > 0 ? (
               <div className="space-y-3">
                 {recentUploads.map((upload) => (
@@ -1227,18 +1811,17 @@ export default function WorkspacePage() {
                         setPreviewImage(upload);
                       }
                     }}
-                    className={`flex items-center gap-3 p-3 rounded-2xl border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 shadow-sm transition-all ${
-                      upload.type.startsWith("image/") 
-                        ? "cursor-pointer hover:border-violet-500/30 hover:bg-slate-100/50 dark:hover:bg-zinc-900/40" 
-                        : ""
-                    }`}
+                    className={`flex items-center gap-3 p-3 rounded-2xl border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 shadow-sm transition-all ${upload.type.startsWith("image/")
+                      ? "cursor-pointer hover:border-violet-500/30 hover:bg-slate-100/50 dark:hover:bg-zinc-900/40"
+                      : ""
+                      }`}
                   >
                     {/* Thumbnail / Icon wrapper */}
                     <div className="h-12 w-12 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-100 dark:border-zinc-800 overflow-hidden flex items-center justify-center shrink-0">
                       {upload.type.startsWith("image/") ? (
-                        <img 
-                          src={upload.url} 
-                          alt={upload.name} 
+                        <img
+                          src={upload.url}
+                          alt={upload.name}
                           className="h-full w-full object-cover"
                           onError={(e) => {
                             (e.target as HTMLElement).style.display = 'none';
@@ -1248,7 +1831,7 @@ export default function WorkspacePage() {
                         React.createElement(getFileIcon(upload.type), { className: "h-5 w-5 text-slate-400" })
                       )}
                     </div>
-                    
+
                     {/* Metadata */}
                     <div className="min-w-0 flex-1">
                       <p className="text-xs font-semibold text-slate-700 dark:text-zinc-200 truncate">{upload.name}</p>
@@ -1310,7 +1893,7 @@ export default function WorkspacePage() {
                   <p className="text-[10px] text-slate-400 dark:text-zinc-500">Uploaded at {previewImage.uploadTime}</p>
                 </div>
               </div>
-              
+
               <div className="relative rounded-2xl overflow-hidden bg-slate-50 dark:bg-zinc-950 border border-slate-100 dark:border-zinc-900 flex items-center justify-center max-h-[70vh]">
                 <img
                   src={previewImage.url}
@@ -1322,6 +1905,14 @@ export default function WorkspacePage() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="fixed bottom-6 right-6 z-50 bg-slate-900/90 dark:bg-zinc-800/90 backdrop-blur-md text-white text-xs font-semibold py-3 px-4.5 rounded-2xl shadow-xl border border-slate-700/35 dark:border-zinc-700/35 flex items-center gap-2 animate-fade-in">
+          <Info className="h-4 w-4 text-emerald-500" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
 
     </main>
   );

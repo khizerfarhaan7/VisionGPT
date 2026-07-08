@@ -9,31 +9,12 @@ from app.schemas.extract import PDFExtractRequestSchema, PDFExtractResponseSchem
 
 logger = logging.getLogger(__name__)
 
-def exclude_embeddings(data):
-    if isinstance(data, dict):
-        return {
-            k: exclude_embeddings(v) 
-            for k, v in data.items() 
-            if "embed" not in k.lower()
-        }
-    elif isinstance(data, list):
-        return [exclude_embeddings(item) for item in data]
-    return data
-
-def log_http_exception_details(e: Exception, ollama_url: str, model_name: str, payload: dict):
-    tb = traceback.format_exc()
-    exc_type = type(e).__name__
-    exc_msg = getattr(e, "detail", str(e))
-    cleaned_payload = exclude_embeddings(payload)
-    logger.error(
-        f"Local LLM Error Details:\n"
-        f"Exception Type: {exc_type}\n"
-        f"Exception Message: {exc_msg}\n"
-        f"Ollama URL: {ollama_url}\n"
-        f"Model Name: {model_name}\n"
-        f"Request Payload: {cleaned_payload}\n"
-        f"Traceback:\n{tb}"
-    )
+from app.core.rag import (
+    get_embedding_model,
+    execute_local_rag,
+    exclude_embeddings,
+    log_http_exception_details
+)
 
 router = APIRouter()
 
@@ -190,13 +171,7 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 from app.schemas.index import PDFIndexRequestSchema, PDFIndexResponseSchema
 
-_embedding_model = None
-
-def get_embedding_model():
-    global _embedding_model
-    if _embedding_model is None:
-        _embedding_model = SentenceTransformer("BAAI/bge-small-en-v1.5")
-    return _embedding_model
+# get_embedding_model imported from app.core.rag
 
 @router.post("/index", response_model=PDFIndexResponseSchema, status_code=status.HTTP_200_OK)
 async def index_pdf(payload: PDFIndexRequestSchema):
@@ -355,155 +330,23 @@ async def chat_pdf(payload: PDFChatRequestSchema):
     
     # Check if index and metadata exist
     vector_store_dir = Path(settings.UPLOAD_DIR) / "vector_store" / pdf_id
-    index_path = vector_store_dir / "faiss.index"
-    metadata_path = vector_store_dir / "metadata.json"
 
-    if not index_path.exists() or not metadata_path.exists():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="The requested PDF document is not indexed. Please build the knowledge base first."
-        )
-
-    # Load FAISS index and metadata
-    try:
-        index = faiss.read_index(str(index_path))
-        with open(metadata_path, "r", encoding="utf-8") as f:
-            metadata = json.load(f)
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to load vector store or metadata: {str(e)}"
-        )
-
-    # 1. Generate embedding for query using BAAI/bge-small-en-v1.5
-    try:
-        model = get_embedding_model()
-        query_vector = model.encode([payload.question], convert_to_numpy=True).astype("float32")
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to generate query embedding: {str(e)}"
-        )
-
-    # 2. Search FAISS index (Top K=3)
-    k = 3
-    try:
-        distances, indices = index.search(query_vector, k)
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"FAISS search execution failed: {str(e)}"
-        )
-
-    # 3. Retrieve chunks and construct prompt context
-    sources = []
-    context_blocks = []
-    
-    for rank, idx_val in enumerate(indices[0]):
-        if idx_val == -1 or idx_val >= len(metadata):
-            continue
-        chunk_info = metadata[idx_val]
-        dist = float(distances[0][rank])
-        
-        sources.append({
-            "chunk_id": chunk_info["chunk_id"],
-            "page": str(chunk_info["page"]),
-            "similarity_score": dist
-        })
-        context_blocks.append(f"Source: {chunk_info['chunk_id']} (Page {chunk_info['page']})\n{chunk_info['text']}")
-
-    rag_context = "\n\n---\n\n".join(context_blocks)
-
-    # 4. Formulate instructions and messages list for Ollama
     system_prompt = (
-        "You are a helpful assistant answering questions about a PDF document.\n"
-        "Answer the question naturally and accurately based only on the provided context.\n"
-        "If the answer cannot be determined from the context, clearly say so."
+        "You are a highly precise AI assistant answering questions based solely on the provided contents of a PDF document.\n"
+        "Follow these strict directives:\n"
+        "1. Base your answer ONLY on the provided context blocks. Do not assume, extrapolate, or invent facts. Never hallucinate.\n"
+        "2. If the answer cannot be determined from the context, state clearly and concisely that the information is not present in the document.\n"
+        "3. Keep your answers concise yet complete. Prefer structure and bullet lists when summarizing or listing items.\n"
+        "4. Do not reference internal components, vector indexes, FAISS, embeddings, or technical systems in your answers."
     )
     
-    messages = [{"role": "system", "content": system_prompt}]
-    
-    # Feed conversation history (keep only the last 1 user and last 2 assistant messages from history,
-    # so that combined with the current query, we send exactly 2 user and 2 assistant messages)
-    history_messages = []
-    user_count = 0
-    assistant_count = 0
-    for msg in reversed(payload.history or []):
-        if msg.role == "user":
-            if user_count < 1:
-                history_messages.append(msg)
-                user_count += 1
-        elif msg.role == "assistant":
-            if assistant_count < 2:
-                history_messages.append(msg)
-                assistant_count += 1
-    
-    history_messages.reverse()
-    
-    for msg in history_messages:
-        role = "user" if msg.role == "user" else "assistant"
-        messages.append({"role": role, "content": msg.content})
-
-    # Add final query turn incorporating RAG context
-    final_content = (
-        f"Context from PDF:\n{rag_context}\n\n"
-        f"Question: {payload.question}"
+    return await execute_local_rag(
+        vector_store_dir=vector_store_dir,
+        question=payload.question,
+        history=payload.history,
+        system_prompt=system_prompt,
+        k=3
     )
-    messages.append({"role": "user", "content": final_content})
-
-    # Calculate prompt statistics
-    total_messages = len(messages)
-    total_chars = sum(len(msg["content"]) for msg in messages)
-    estimated_tokens = int(total_chars / 4)
-
-    logger.info(
-        f"Prompt stats for Ollama query:\n"
-        f"Total messages sent to Ollama: {total_messages}\n"
-        f"Total characters in the prompt: {total_chars}\n"
-        f"Estimated token count: {estimated_tokens}"
-    )
-
-    # 5. Query Ollama model
-    ollama_url = f"{settings.OLLAMA_BASE_URL}/api/chat"
-    ollama_payload = {
-        "model": settings.OLLAMA_MODEL,
-        "messages": messages,
-        "stream": False
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=180.0) as client:
-            response = await client.post(ollama_url, json=ollama_payload)
-            if response.status_code != 200:
-                logger.error(
-                    f"Ollama returned a non-200 response:\n"
-                    f"Status Code: {response.status_code}\n"
-                    f"Response Body: {response.text}"
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=f"Local LLM service returned status code {response.status_code}. Please verify Ollama is running and has model {settings.OLLAMA_MODEL} loaded."
-                )
-            
-            res_data = response.json()
-            logger.info(f"Ollama raw JSON response: {res_data}")
-            answer = res_data.get("message", {}).get("content", "").strip()
-            
-            return {
-                "success": True,
-                "answer": answer,
-                "sources": sources
-            }
-            
-    except HTTPException as e:
-        log_http_exception_details(e, ollama_url, settings.OLLAMA_MODEL, ollama_payload)
-        raise e
-    except httpx.RequestError as e:
-        log_http_exception_details(e, ollama_url, settings.OLLAMA_MODEL, ollama_payload)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Local LLM service (Ollama) is unavailable: {str(e)}. Please verify Ollama is running on {settings.OLLAMA_BASE_URL}."
-        )
 
 
 

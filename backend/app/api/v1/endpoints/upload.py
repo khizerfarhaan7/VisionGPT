@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi import APIRouter, File, UploadFile, HTTPException, status
 from app.core.config import settings
 from app.schemas.upload import ImageUploadResponseSchema
+from app.schemas.audio import AudioUploadResponseSchema
 
 router = APIRouter()
 
@@ -165,4 +166,70 @@ async def upload_pdf(file: UploadFile = File(...)):
         "size": file_size,
         "path": relative_path
     }
+
+AUDIO_MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".mp4"}
+
+@router.post("/audio", response_model=AudioUploadResponseSchema, status_code=status.HTTP_200_OK)
+async def upload_audio(file: UploadFile = File(...)):
+    """
+    Upload an audio file to the server.
+    Validates format (.mp3, .wav, .m4a) and file size (max 50MB).
+    Saves the audio file under uploads/audio/ using unique UUID name.
+    """
+    # 1. Validate file extension
+    original_filename = file.filename or "unknown"
+    file_ext = Path(original_filename).suffix.lower()
+    
+    if file_ext not in ALLOWED_AUDIO_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported file type. Supported formats: {', '.join(sorted(ALLOWED_AUDIO_EXTENSIONS))}"
+        )
+        
+    # 2. Validate file size
+    file_size = getattr(file, "size", None)
+    if file_size is None:
+        try:
+            file.file.seek(0, 2)
+            file_size = file.file.tell()
+            file.file.seek(0)
+        except Exception:
+            file_size = 0
+            
+    if file_size > AUDIO_MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="File size exceeds the maximum limit of 50MB."
+        )
+        
+    # 3. Resolve destination path and create directories
+    upload_dir = Path(settings.UPLOAD_DIR) / "audio"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 4. Generate unique UUID filename while preserving extension
+    unique_filename = f"{uuid.uuid4()}{file_ext}"
+    destination_path = upload_dir / unique_filename
+    
+    # 5. Save file payload
+    try:
+        with destination_path.open("wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to persist uploaded audio file: {str(e)}"
+        )
+        
+    # 6. Construct response parameters
+    relative_path = f"uploads/audio/{unique_filename}"
+    
+    return {
+        "success": True,
+        "filename": unique_filename,
+        "original_name": original_filename,
+        "size": file_size,
+        "path": relative_path
+    }
+
 

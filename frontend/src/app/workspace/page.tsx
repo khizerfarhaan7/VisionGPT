@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   UploadCloud,
@@ -33,10 +33,9 @@ interface RecentUpload {
   type: string;
 }
 
-interface AnalysisResult {
-  answer: string;
-  confidence: number;
-  filename: string;
+interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
 }
 
 export default function WorkspacePage() {
@@ -45,14 +44,23 @@ export default function WorkspacePage() {
   const [recentUploads, setRecentUploads] = useState<RecentUpload[]>([]);
   const [previewImage, setPreviewImage] = useState<RecentUpload | null>(null);
   
-  // New modular states for visual AI analysis
+  // Conversational states for visual reasoning chat
+  const [activeFileId, setActiveFileId] = useState<string | null>(null);
+  const [chatHistories, setChatHistories] = useState<Record<string, ChatMessage[]>>({});
+  const [currentInput, setCurrentInput] = useState("");
   const [analysisLoading, setAnalysisLoading] = useState(false);
-  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
-  const [userPrompts, setUserPrompts] = useState<Record<string, string>>({});
-  
+
+  const chatScrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isUploading = selectedFiles.some((f) => f.status === "uploading");
+
+  // Scroll to bottom of chat history when message list or loading state changes
+  useEffect(() => {
+    if (chatScrollRef.current) {
+      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+    }
+  }, [chatHistories, analysisLoading, activeFileId]);
 
   const getFileIcon = (mimeType: string) => {
     if (mimeType.startsWith("image/")) return ImageIcon;
@@ -133,9 +141,39 @@ export default function WorkspacePage() {
     xhr.send(formData);
   };
 
-  const triggerAnalysis = async (savedName: string, originalName: string, promptText: string) => {
+  const handleAnalyzeClick = (file: SelectedFile) => {
+    setActiveFileId(file.id);
+    if (!chatHistories[file.id]) {
+      setChatHistories((prev) => ({
+        ...prev,
+        [file.id]: [
+          { role: "assistant", content: `Hello! I am VisionGPT. Ask me anything about "${file.name}".` }
+        ]
+      }));
+    }
+  };
+
+  const handleSendMessage = async () => {
+    if (!activeFileId || !currentInput.trim() || analysisLoading) return;
+
+    const targetFile = selectedFiles.find((f) => f.id === activeFileId);
+    if (!targetFile) return;
+
+    const userMessageContent = currentInput.trim();
+    setCurrentInput("");
+
+    const userMessage: ChatMessage = { role: "user", content: userMessageContent };
+    
+    // Capture previous history to send to backend before appending new user message to state
+    const previousHistory = chatHistories[activeFileId] || [];
+
+    setChatHistories((prev) => ({
+      ...prev,
+      [activeFileId]: [...(prev[activeFileId] || []), userMessage]
+    }));
+
     setAnalysisLoading(true);
-    setAnalysisResult(null);
+
     try {
       const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
       const response = await fetch(`${apiBaseUrl}/analyze/image`, {
@@ -143,17 +181,23 @@ export default function WorkspacePage() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ filename: savedName, user_prompt: promptText }),
+        body: JSON.stringify({
+          filename: targetFile.savedName || targetFile.name,
+          user_prompt: userMessageContent,
+          history: previousHistory.map((m) => ({ role: m.role, content: m.content }))
+        }),
       });
+
       if (response.ok) {
         const data = await response.json();
-        setAnalysisResult({
-          answer: data.answer,
-          confidence: data.confidence,
-          filename: originalName
-        });
+        const assistantMessage: ChatMessage = { role: "assistant", content: data.answer };
+        
+        setChatHistories((prev) => ({
+          ...prev,
+          [activeFileId]: [...(prev[activeFileId] || []), assistantMessage]
+        }));
       } else {
-        alert("Failed to reason about the image file. Please verify model service status.");
+        alert("Failed to analyze image file. Please verify model service status.");
       }
     } catch {
       alert("Error contacting the vision reasoning service.");
@@ -163,6 +207,10 @@ export default function WorkspacePage() {
   };
 
   const handleFilesAdded = (files: File[]) => {
+    // Preserve chat histories until new files are uploaded, then clear them
+    setChatHistories({});
+    setActiveFileId(null);
+
     const newFiles = files.map((file) => ({
       id: Math.random().toString(36).substring(2, 9),
       name: file.name,
@@ -359,76 +407,61 @@ export default function WorkspacePage() {
                   return (
                     <div
                       key={`${file.name}-${idx}`}
-                      className="p-3.5 rounded-2xl border border-slate-100 dark:border-zinc-850 bg-slate-50/50 dark:bg-zinc-950/40 shadow-sm hover:border-slate-200 dark:hover:border-zinc-800 transition-all space-y-3"
+                      className="flex items-center justify-between p-3.5 rounded-2xl border border-slate-100 dark:border-zinc-850 bg-slate-50/50 dark:bg-zinc-950/40 text-xs shadow-sm hover:border-slate-200 dark:hover:border-zinc-800 transition-all"
                     >
-                      {/* Top Row: File Details */}
-                      <div className="flex items-center justify-between text-xs">
-                        <div className="flex items-center gap-3 min-w-0">
-                          <div className="h-8.5 w-8.5 rounded-xl bg-violet-500/10 dark:bg-violet-400/10 flex items-center justify-center shrink-0">
-                            <Icon className="h-4.5 w-4.5 text-violet-600 dark:text-violet-400" />
-                          </div>
-                          <div className="min-w-0">
-                            <p className="font-semibold text-slate-700 dark:text-zinc-200 truncate max-w-[150px] sm:max-w-xs md:max-w-sm">{file.name}</p>
-                            <p className="text-[9px] text-slate-400 dark:text-zinc-500 uppercase">{file.type || 'unknown type'}</p>
-                          </div>
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="h-8.5 w-8.5 rounded-xl bg-violet-500/10 dark:bg-violet-400/10 flex items-center justify-center shrink-0">
+                          <Icon className="h-4.5 w-4.5 text-violet-600 dark:text-violet-400" />
                         </div>
-                        <div className="flex items-center gap-3 shrink-0">
-                          {file.status === "uploading" && (
-                            <div className="flex items-center gap-2">
-                              <div className="w-16 h-1.5 bg-slate-200 dark:bg-zinc-850 rounded-full overflow-hidden">
-                                <div 
-                                  className="h-full bg-violet-500 transition-all duration-300" 
-                                  style={{ width: `${file.progress}%` }}
-                                />
-                              </div>
-                              <span className="text-[10px] text-slate-400 dark:text-zinc-500 font-semibold">{file.progress}%</span>
+                        <div className="min-w-0">
+                          <p className="font-semibold text-slate-700 dark:text-zinc-200 truncate max-w-[150px] sm:max-w-xs md:max-w-sm">{file.name}</p>
+                          <p className="text-[9px] text-slate-400 dark:text-zinc-500 uppercase">{file.type || 'unknown type'}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3 shrink-0">
+                        {file.status === "uploading" && (
+                          <div className="flex items-center gap-2">
+                            <div className="w-16 h-1.5 bg-slate-200 dark:bg-zinc-850 rounded-full overflow-hidden">
+                              <div 
+                                className="h-full bg-violet-500 transition-all duration-300" 
+                                style={{ width: `${file.progress}%` }}
+                              />
                             </div>
-                          )}
-                          {file.status === "success" && (
+                            <span className="text-[10px] text-slate-400 dark:text-zinc-500 font-semibold">{file.progress}%</span>
+                          </div>
+                        )}
+                        {file.status === "success" && (
+                          <div className="flex items-center gap-2">
                             <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
                               Uploaded
                             </span>
-                          )}
-                          {file.status === "error" && (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-semibold bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20">
-                              Failed
-                            </span>
-                          )}
-                          <p className="font-medium text-slate-500 dark:text-zinc-400 text-[11px] min-w-[50px] text-right">
-                            {formatBytes(file.size)}
-                          </p>
-                        </div>
+                            {file.type.startsWith("image/") && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleAnalyzeClick(file);
+                                }}
+                                disabled={analysisLoading}
+                                className={`px-2.5 py-0.5 rounded-md text-[9px] font-bold shadow-sm transition-all transform active:scale-95 cursor-pointer disabled:cursor-not-allowed ${
+                                  activeFileId === file.id
+                                    ? "bg-violet-600 text-white"
+                                    : "bg-slate-200/80 hover:bg-slate-300/85 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300"
+                                }`}
+                              >
+                                {activeFileId === file.id ? "Active Chat" : "Analyze"}
+                              </button>
+                            )}
+                          </div>
+                        )}
+                        {file.status === "error" && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-semibold bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20">
+                            Failed
+                          </span>
+                        )}
+                        <p className="font-medium text-slate-500 dark:text-zinc-400 text-[11px] min-w-[50px] text-right">
+                          {formatBytes(file.size)}
+                        </p>
                       </div>
-
-                      {/* Bottom Row: Prompt Input for Conversational Image Reasoning */}
-                      {file.status === "success" && file.type.startsWith("image/") && (
-                        <div className="flex flex-col sm:flex-row gap-2.5 pt-2 border-t border-slate-100 dark:border-zinc-900">
-                          <textarea
-                            value={userPrompts[file.id] || ""}
-                            onChange={(e) =>
-                              setUserPrompts((prev) => ({ ...prev, [file.id]: e.target.value }))
-                            }
-                            placeholder="Ask anything about this image..."
-                            rows={2}
-                            disabled={analysisLoading}
-                            className="flex-1 px-3 py-2 rounded-xl text-xs border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 focus:outline-none focus:ring-2 focus:ring-violet-500/30 resize-none disabled:opacity-60 disabled:cursor-not-allowed"
-                          />
-                          <button
-                            onClick={() => {
-                              const prompt = userPrompts[file.id]?.trim() || "";
-                              if (!prompt) {
-                                alert("Please enter a question to reason about the image.");
-                                return;
-                              }
-                              triggerAnalysis(file.savedName || file.name, file.name, prompt);
-                            }}
-                            disabled={analysisLoading || !(userPrompts[file.id]?.trim())}
-                            className="px-4 py-2 rounded-xl bg-violet-600 hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center self-end sm:self-stretch min-w-[70px] cursor-pointer"
-                          >
-                            <span>Send</span>
-                          </button>
-                        </div>
-                      )}
                     </div>
                   );
                 })}
@@ -471,55 +504,100 @@ export default function WorkspacePage() {
 
         </div>
 
-        {/* Right Column: Recent Uploads & Analysis Panel */}
+        {/* Right Column: Recent Uploads & Conversational Chat Panel */}
         <div className="space-y-8">
           
-          {/* Analysis Results Display */}
-          {(analysisLoading || analysisResult) && (
+          {/* Analysis Results Display as Conversational Chat */}
+          {activeFileId && (
             <motion.div
               initial={{ opacity: 0, y: 15 }}
               animate={{ opacity: 1, y: 0 }}
-              className="border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 rounded-3xl p-6 shadow-sm space-y-4"
+              className="border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 rounded-3xl shadow-sm flex flex-col h-[500px] overflow-hidden"
             >
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-zinc-800/50">
-                <h2 className="text-xs font-bold tracking-tight uppercase text-slate-500 dark:text-zinc-400">Analysis Results</h2>
-                {analysisResult && (
-                  <button
-                    onClick={() => setAnalysisResult(null)}
-                    className="text-slate-400 hover:text-slate-655 dark:hover:text-zinc-200 cursor-pointer"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
+              {/* Chat Header */}
+              <div className="flex items-center justify-between p-4 border-b border-slate-100 dark:border-zinc-800/50 bg-slate-50/50 dark:bg-zinc-950/20">
+                <div className="min-w-0">
+                  <h2 className="text-xs font-bold tracking-tight uppercase text-slate-500 dark:text-zinc-400">VisionGPT Chat</h2>
+                  <p className="text-[10px] text-slate-400 dark:text-zinc-500 truncate max-w-[180px]">
+                    {selectedFiles.find((f) => f.id === activeFileId)?.name || "Image Reasoning"}
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    setActiveFileId(null);
+                  }}
+                  className="text-slate-400 hover:text-slate-650 dark:hover:text-zinc-200 cursor-pointer"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {/* Chat Message Scrollable Area */}
+              <div 
+                ref={chatScrollRef}
+                className="flex-1 overflow-y-auto p-4 space-y-4 text-xs scroll-smooth"
+              >
+                {(chatHistories[activeFileId] || []).map((msg, idx) => {
+                  const isUser = msg.role === "user";
+                  return (
+                    <div
+                      key={idx}
+                      className={`flex ${isUser ? "justify-end" : "justify-start"}`}
+                    >
+                      <div
+                        className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 shadow-sm leading-relaxed whitespace-pre-wrap break-words ${
+                          isUser
+                            ? "bg-violet-600 text-white rounded-tr-none"
+                            : "bg-slate-100 dark:bg-zinc-850 text-slate-800 dark:text-zinc-250 rounded-tl-none border border-slate-200/20 dark:border-zinc-800/30"
+                        }`}
+                      >
+                        {msg.content}
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {/* Animated Thinking Indicator */}
+                {analysisLoading && (
+                  <div className="flex justify-start">
+                    <div className="bg-slate-100 dark:bg-zinc-850 text-slate-500 dark:text-zinc-450 rounded-2xl rounded-tl-none px-3.5 py-2.5 border border-slate-200/20 dark:border-zinc-800/30 shadow-sm flex items-center gap-2">
+                      <div className="flex gap-1">
+                        <span className="w-1.5 h-1.5 bg-slate-400 dark:bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: "0ms" }}></span>
+                        <span className="w-1.5 h-1.5 bg-slate-400 dark:bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: "150ms" }}></span>
+                        <span className="w-1.5 h-1.5 bg-slate-400 dark:bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: "300ms" }}></span>
+                      </div>
+                      <span className="text-[10px] font-semibold italic">VisionGPT is thinking...</span>
+                    </div>
+                  </div>
                 )}
               </div>
 
-              {analysisLoading ? (
-                <div className="flex flex-col items-center justify-center py-10 space-y-3">
-                  <div className="h-8 w-8 animate-spin rounded-full border-2 border-violet-500 border-t-transparent" />
-                  <p className="text-[11px] text-slate-400 dark:text-zinc-500">AI Model reasoning in progress...</p>
+              {/* Chat Input Area (Fixed at bottom) */}
+              <div className="p-3 border-t border-slate-100 dark:border-zinc-850/50 bg-slate-50/50 dark:bg-zinc-950/20">
+                <div className="flex gap-2 items-end">
+                  <textarea
+                    value={currentInput}
+                    onChange={(e) => setCurrentInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSendMessage();
+                      }
+                    }}
+                    placeholder="Ask anything about this image..."
+                    rows={2}
+                    disabled={analysisLoading}
+                    className="flex-1 px-3 py-2 rounded-xl text-xs border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 focus:outline-none focus:ring-2 focus:ring-violet-500/30 resize-none disabled:opacity-60 disabled:cursor-not-allowed max-h-20"
+                  />
+                  <button
+                    onClick={handleSendMessage}
+                    disabled={analysisLoading || !currentInput.trim()}
+                    className="px-4 py-2 rounded-xl bg-violet-600 hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center min-w-[70px] h-9 cursor-pointer"
+                  >
+                    Send
+                  </button>
                 </div>
-              ) : (
-                analysisResult && (
-                  <div className="space-y-4 text-xs">
-                    <div>
-                      <p className="text-[10px] text-slate-400 dark:text-zinc-500 uppercase tracking-wider font-semibold">Source File</p>
-                      <p className="font-semibold mt-0.5 text-slate-700 dark:text-zinc-200 truncate">{analysisResult.filename}</p>
-                    </div>
-
-                    <div>
-                      <p className="text-[10px] text-slate-400 dark:text-zinc-500 uppercase tracking-wider font-semibold">AI Reasoning Answer</p>
-                      <p className="mt-1 leading-relaxed text-slate-600 dark:text-zinc-300 bg-slate-50/50 dark:bg-zinc-950/40 p-2.5 rounded-xl border border-slate-100 dark:border-zinc-850/50 whitespace-pre-wrap">
-                        {analysisResult.answer}
-                      </p>
-                    </div>
-
-                    <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-zinc-850/50">
-                      <span className="text-slate-400">Confidence Metric</span>
-                      <span className="font-semibold text-emerald-500">{(analysisResult.confidence * 100).toFixed(1)}%</span>
-                    </div>
-                  </div>
-                )
-              )}
+              </div>
             </motion.div>
           )}
 

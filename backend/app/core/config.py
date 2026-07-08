@@ -59,9 +59,10 @@ class Settings(BaseSettings):
     
     # LLM Settings
     OLLAMA_BASE_URL: str = "http://localhost:11434"
-    OLLAMA_MODEL: str = "qwen3"
+    OLLAMA_MODEL: str = "qwen2.5:3b"
 
 
 
 settings = Settings()
 print("Loaded Gemini Key:", settings.GEMINI_API_KEY)
+print(settings.OLLAMA_MODEL)

@@ -1,9 +1,39 @@
 import os
 import fitz  # PyMuPDF
 from pathlib import Path
+import logging
+import traceback
 from fastapi import APIRouter, HTTPException, status
 from app.core.config import settings
 from app.schemas.extract import PDFExtractRequestSchema, PDFExtractResponseSchema
+
+logger = logging.getLogger(__name__)
+
+def exclude_embeddings(data):
+    if isinstance(data, dict):
+        return {
+            k: exclude_embeddings(v) 
+            for k, v in data.items() 
+            if "embed" not in k.lower()
+        }
+    elif isinstance(data, list):
+        return [exclude_embeddings(item) for item in data]
+    return data
+
+def log_http_exception_details(e: Exception, ollama_url: str, model_name: str, payload: dict):
+    tb = traceback.format_exc()
+    exc_type = type(e).__name__
+    exc_msg = getattr(e, "detail", str(e))
+    cleaned_payload = exclude_embeddings(payload)
+    logger.error(
+        f"Local LLM Error Details:\n"
+        f"Exception Type: {exc_type}\n"
+        f"Exception Message: {exc_msg}\n"
+        f"Ollama URL: {ollama_url}\n"
+        f"Model Name: {model_name}\n"
+        f"Request Payload: {cleaned_payload}\n"
+        f"Traceback:\n{tb}"
+    )
 
 router = APIRouter()
 
@@ -355,8 +385,8 @@ async def chat_pdf(payload: PDFChatRequestSchema):
             detail=f"Failed to generate query embedding: {str(e)}"
         )
 
-    # 2. Search FAISS index (Top K=5)
-    k = 5
+    # 2. Search FAISS index (Top K=3)
+    k = 3
     try:
         distances, indices = index.search(query_vector, k)
     except Exception as e:
@@ -393,8 +423,24 @@ async def chat_pdf(payload: PDFChatRequestSchema):
     
     messages = [{"role": "system", "content": system_prompt}]
     
-    # Feed conversation history
-    for msg in payload.history:
+    # Feed conversation history (keep only the last 1 user and last 2 assistant messages from history,
+    # so that combined with the current query, we send exactly 2 user and 2 assistant messages)
+    history_messages = []
+    user_count = 0
+    assistant_count = 0
+    for msg in reversed(payload.history or []):
+        if msg.role == "user":
+            if user_count < 1:
+                history_messages.append(msg)
+                user_count += 1
+        elif msg.role == "assistant":
+            if assistant_count < 2:
+                history_messages.append(msg)
+                assistant_count += 1
+    
+    history_messages.reverse()
+    
+    for msg in history_messages:
         role = "user" if msg.role == "user" else "assistant"
         messages.append({"role": role, "content": msg.content})
 
@@ -405,6 +451,18 @@ async def chat_pdf(payload: PDFChatRequestSchema):
     )
     messages.append({"role": "user", "content": final_content})
 
+    # Calculate prompt statistics
+    total_messages = len(messages)
+    total_chars = sum(len(msg["content"]) for msg in messages)
+    estimated_tokens = int(total_chars / 4)
+
+    logger.info(
+        f"Prompt stats for Ollama query:\n"
+        f"Total messages sent to Ollama: {total_messages}\n"
+        f"Total characters in the prompt: {total_chars}\n"
+        f"Estimated token count: {estimated_tokens}"
+    )
+
     # 5. Query Ollama model
     ollama_url = f"{settings.OLLAMA_BASE_URL}/api/chat"
     ollama_payload = {
@@ -414,15 +472,21 @@ async def chat_pdf(payload: PDFChatRequestSchema):
     }
 
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=180.0) as client:
             response = await client.post(ollama_url, json=ollama_payload)
             if response.status_code != 200:
+                logger.error(
+                    f"Ollama returned a non-200 response:\n"
+                    f"Status Code: {response.status_code}\n"
+                    f"Response Body: {response.text}"
+                )
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     detail=f"Local LLM service returned status code {response.status_code}. Please verify Ollama is running and has model {settings.OLLAMA_MODEL} loaded."
                 )
             
             res_data = response.json()
+            logger.info(f"Ollama raw JSON response: {res_data}")
             answer = res_data.get("message", {}).get("content", "").strip()
             
             return {
@@ -431,7 +495,11 @@ async def chat_pdf(payload: PDFChatRequestSchema):
                 "sources": sources
             }
             
+    except HTTPException as e:
+        log_http_exception_details(e, ollama_url, settings.OLLAMA_MODEL, ollama_payload)
+        raise e
     except httpx.RequestError as e:
+        log_http_exception_details(e, ollama_url, settings.OLLAMA_MODEL, ollama_payload)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Local LLM service (Ollama) is unavailable: {str(e)}. Please verify Ollama is running on {settings.OLLAMA_BASE_URL}."

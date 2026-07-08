@@ -39,6 +39,13 @@ interface ChatMessage {
   content: string;
 }
 
+interface ExtractResult {
+  pageCount: number;
+  wordCount: number;
+  characterCount: number;
+  extractedText: string;
+}
+
 export default function WorkspacePage() {
   const [isDragActive, setIsDragActive] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<SelectedFile[]>([]);
@@ -50,6 +57,10 @@ export default function WorkspacePage() {
   const [chatHistories, setChatHistories] = useState<Record<string, ChatMessage[]>>({});
   const [currentInput, setCurrentInput] = useState("");
   const [analysisLoading, setAnalysisLoading] = useState(false);
+
+  // States for PDF text extraction module
+  const [extractResults, setExtractResults] = useState<Record<string, ExtractResult>>({});
+  const [extractLoading, setExtractLoading] = useState(false);
 
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -163,6 +174,39 @@ export default function WorkspacePage() {
     }
   };
 
+  const triggerTextExtraction = async (savedName: string) => {
+    if (!activeFileId || extractLoading) return;
+    setExtractLoading(true);
+    try {
+      const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+      const response = await fetch(`${apiBaseUrl}/pdf/extract`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ filename: savedName }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setExtractResults((prev) => ({
+          ...prev,
+          [activeFileId]: {
+            pageCount: data.page_count,
+            wordCount: data.word_count,
+            characterCount: data.character_count,
+            extractedText: data.extracted_text,
+          }
+        }));
+      } else {
+        alert("Failed to extract text from PDF. Please check document formatting.");
+      }
+    } catch {
+      alert("Error contacting the text extraction service.");
+    } finally {
+      setExtractLoading(false);
+    }
+  };
+
   const handleSendMessage = async () => {
     if (!activeFileId || !currentInput.trim() || analysisLoading) return;
 
@@ -217,6 +261,7 @@ export default function WorkspacePage() {
   const handleFilesAdded = (files: File[]) => {
     // Preserve chat histories until new files are uploaded, then clear them
     setChatHistories({});
+    setExtractResults({});
     setActiveFileId(null);
 
     const newFiles = files.map((file) => ({
@@ -415,7 +460,7 @@ export default function WorkspacePage() {
                   return (
                     <div
                       key={`${file.name}-${idx}`}
-                      className="flex items-center justify-between p-3.5 rounded-2xl border border-slate-100 dark:border-zinc-850 bg-slate-50/50 dark:bg-zinc-950/40 text-xs shadow-sm hover:border-slate-200 dark:hover:border-zinc-800 transition-all"
+                      className="flex items-center justify-between p-3.5 rounded-2xl border border-slate-100 dark:border-zinc-855 bg-slate-50/50 dark:bg-zinc-950/40 text-xs shadow-sm hover:border-slate-200 dark:hover:border-zinc-800 transition-all"
                     >
                       <div className="flex items-center gap-3 min-w-0">
                         <div className="h-8.5 w-8.5 rounded-xl bg-violet-500/10 dark:bg-violet-400/10 flex items-center justify-center shrink-0">
@@ -454,8 +499,8 @@ export default function WorkspacePage() {
                                 disabled={analysisLoading}
                                 className={`px-2.5 py-0.5 rounded-md text-[9px] font-bold shadow-sm transition-all transform active:scale-95 cursor-pointer disabled:cursor-not-allowed ${
                                   activeFileId === file.id
-                                    ? "bg-violet-600 text-white"
-                                    : "bg-slate-200/80 hover:bg-slate-300/85 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300"
+                                    ? "bg-violet-650 text-white"
+                                    : "bg-slate-200/80 hover:bg-slate-350/80 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300"
                                 }`}
                               >
                                 {activeFileId === file.id ? "Active Chat" : "Analyze"}
@@ -555,42 +600,95 @@ export default function WorkspacePage() {
                 </button>
               </div>
 
-              {/* PDF Preview details block */}
-              <div className="flex-1 flex flex-col items-center justify-center p-6 border border-slate-100 dark:border-zinc-850 bg-slate-50/50 dark:bg-zinc-950/40 rounded-2xl text-center space-y-4">
-                <div className="h-16 w-16 rounded-2xl bg-red-500/10 dark:bg-red-400/10 flex items-center justify-center border border-red-500/20">
-                  <FileText className="h-8 w-8 text-red-600 dark:text-red-400" />
-                </div>
-                
-                <div className="space-y-1 w-full px-2">
-                  <h3 className="text-xs font-bold truncate max-w-full text-slate-800 dark:text-zinc-200">
-                    {selectedFiles.find((f) => f.id === activeFileId)?.name}
-                  </h3>
-                  <p className="text-[10px] text-slate-400 dark:text-zinc-500">
-                    Size: {formatBytes(selectedFiles.find((f) => f.id === activeFileId)?.size || 0)}
-                  </p>
-                  <p className="text-[10px] text-slate-400 dark:text-zinc-500 font-semibold">
-                    Pages: {selectedFiles.find((f) => f.id === activeFileId)?.pageCount || "Unknown"}
-                  </p>
-                </div>
-              </div>
+              {/* PDF Preview details block / Scrollable Text Viewer */}
+              {extractResults[activeFileId] ? (
+                <div className="flex-1 flex flex-col min-h-0 space-y-4">
+                  {/* Extraction Metrics Grid */}
+                  <div className="grid grid-cols-3 gap-2 text-center">
+                    <div className="p-2 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-100 dark:border-zinc-850">
+                      <p className="text-[9px] text-slate-400 dark:text-zinc-500 font-medium">Pages</p>
+                      <p className="text-xs font-bold text-slate-700 dark:text-zinc-250">{extractResults[activeFileId].pageCount}</p>
+                    </div>
+                    <div className="p-2 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-100 dark:border-zinc-850">
+                      <p className="text-[9px] text-slate-400 dark:text-zinc-500 font-medium">Words</p>
+                      <p className="text-xs font-bold text-slate-700 dark:text-zinc-250">{extractResults[activeFileId].wordCount}</p>
+                    </div>
+                    <div className="p-2 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-100 dark:border-zinc-850">
+                      <p className="text-[9px] text-slate-400 dark:text-zinc-500 font-medium">Chars</p>
+                      <p className="text-xs font-bold text-slate-700 dark:text-zinc-250">{extractResults[activeFileId].characterCount}</p>
+                    </div>
+                  </div>
 
-              {/* Action Button: Open PDF */}
-              <button
-                onClick={() => {
-                  const target = selectedFiles.find((f) => f.id === activeFileId);
-                  if (target?.savedName) {
-                    const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
-                    const backendRootUrl = apiBaseUrl.replace("/api/v1", "");
-                    window.open(`${backendRootUrl}/uploads/pdfs/${target.savedName}`, "_blank");
-                  } else {
-                    alert("Document is still processing or upload was not completed.");
-                  }
-                }}
-                className="w-full py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center gap-2 cursor-pointer border-0"
-              >
-                <FolderOpen className="h-4 w-4" />
-                <span>Open PDF</span>
-              </button>
+                  {/* Scrollable Text Area */}
+                  <div className="flex-1 min-h-[220px] max-h-[300px] overflow-y-auto p-3 rounded-xl border border-slate-150 dark:border-zinc-850 bg-slate-50/50 dark:bg-zinc-950/40 font-mono text-[10px] text-slate-600 dark:text-zinc-350 leading-normal whitespace-pre-wrap break-words">
+                    {extractResults[activeFileId].extractedText}
+                  </div>
+                </div>
+              ) : (
+                /* Standard PDF Details Cover */
+                <div className="flex-1 flex flex-col items-center justify-center p-6 border border-slate-100 dark:border-zinc-850 bg-slate-50/50 dark:bg-zinc-950/40 rounded-2xl text-center space-y-4">
+                  <div className="h-16 w-16 rounded-2xl bg-red-500/10 dark:bg-red-400/10 flex items-center justify-center border border-red-500/20">
+                    <FileText className="h-8 w-8 text-red-600 dark:text-red-400" />
+                  </div>
+                  
+                  <div className="space-y-1 w-full px-2">
+                    <h3 className="text-xs font-bold truncate max-w-full text-slate-800 dark:text-zinc-200">
+                      {selectedFiles.find((f) => f.id === activeFileId)?.name}
+                    </h3>
+                    <p className="text-[10px] text-slate-400 dark:text-zinc-500">
+                      Size: {formatBytes(selectedFiles.find((f) => f.id === activeFileId)?.size || 0)}
+                    </p>
+                    <p className="text-[10px] text-slate-400 dark:text-zinc-500 font-semibold">
+                      Pages: {selectedFiles.find((f) => f.id === activeFileId)?.pageCount || "Unknown"}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Action Buttons: Extract Text & Open PDF */}
+              <div className="space-y-2.5">
+                {!extractResults[activeFileId] && (
+                  <button
+                    onClick={() => {
+                      const target = selectedFiles.find((f) => f.id === activeFileId);
+                      if (target?.savedName) {
+                        triggerTextExtraction(target.savedName);
+                      }
+                    }}
+                    disabled={extractLoading}
+                    className="w-full py-2.5 rounded-xl bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white text-xs font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center gap-2 cursor-pointer border-0 disabled:cursor-not-allowed"
+                  >
+                    {extractLoading ? (
+                      <>
+                        <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                        <span>Extracting Text...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="h-3.5 w-3.5" />
+                        <span>Extract Text</span>
+                      </>
+                    )}
+                  </button>
+                )}
+
+                <button
+                  onClick={() => {
+                    const target = selectedFiles.find((f) => f.id === activeFileId);
+                    if (target?.savedName) {
+                      const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+                      const backendRootUrl = apiBaseUrl.replace("/api/v1", "");
+                      window.open(`${backendRootUrl}/uploads/pdfs/${target.savedName}`, "_blank");
+                    } else {
+                      alert("Document is still processing or upload was not completed.");
+                    }
+                  }}
+                  className="w-full py-2.5 rounded-xl bg-red-650 hover:bg-red-700 text-white text-xs font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center gap-2 cursor-pointer border-0"
+                >
+                  <FolderOpen className="h-4 w-4" />
+                  <span>Open PDF</span>
+                </button>
+              </div>
             </motion.div>
           )}
 
@@ -660,7 +758,7 @@ export default function WorkspacePage() {
               </div>
 
               {/* Chat Input Area (Fixed at bottom) */}
-              <div className="p-3 border-t border-slate-100 dark:border-zinc-850/50 bg-slate-50/50 dark:bg-zinc-950/20">
+              <div className="p-3 border-t border-slate-100 dark:border-zinc-855 bg-slate-50/50 dark:bg-zinc-950/20">
                 <div className="flex gap-2 items-end">
                   <textarea
                     value={currentInput}

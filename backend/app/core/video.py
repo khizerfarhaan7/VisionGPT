@@ -318,6 +318,164 @@ class VideoService:
                 logger.info(f"Cleaning up temporary frame directory: {temp_path}")
                 self.cleanup_directory(temp_path)
 
+    def process_video_multimodal(
+        self,
+        video_path: Union[str, Path],
+        interval_seconds: float = 3.0
+    ) -> Dict[str, Any]:
+        """
+        Processes a video file, extracting visual frame captions and spoken audio
+        transcripts to merge them into a single chronological timeline.
+        """
+        import time
+        start_time = time.time()
+        
+        video_file = Path(video_path)
+        if not video_file.exists():
+            raise FileNotFoundError(f"Video file not found at: {video_path}")
+            
+        logger.info(f"Starting multimodal video processing for: {video_file.name}")
+        
+        # Determine temporary directories
+        video_id = video_file.stem
+        temp_dir = Path(settings.UPLOAD_DIR) / "temp" / "video_processing" / video_id
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        
+        temp_audio_path = temp_dir / f"{video_id}_extracted.wav"
+        
+        transcript = ""
+        speech_segments = []
+        frames = []
+        
+        # Step 1: Speech Processing (Audio extraction + transcription)
+        audio_success = False
+        try:
+            logger.info("Attempting audio extraction...")
+            audio_extracted = extract_audio(video_file, temp_audio_path)
+            if audio_extracted and temp_audio_path.exists():
+                logger.info("Audio track extracted successfully. Running transcription...")
+                transcript, speech_segments = transcribe_audio_track(temp_audio_path)
+                audio_success = True
+                logger.info(f"Transcription completed successfully. Word count: {len(transcript.split())}")
+            else:
+                logger.error("Audio extraction failed or file not found. Skipping speech understanding.")
+        except Exception as e:
+            logger.error(f"Audio transcription pipeline failed: {str(e)}", exc_info=True)
+            # Fail gracefully, continue with vision only
+            transcript = ""
+            speech_segments = []
+            
+        # Step 2: Vision Processing (Frame extraction + Florence-2 captioning)
+        vision_success = False
+        try:
+            logger.info("Running visual frame extraction and captioning...")
+            vision_result = self.describe_video(
+                video_path=video_file,
+                interval_seconds=interval_seconds,
+                output_dir=temp_dir / "frames",
+                cleanup=True  # Automatically cleans up frame jpg files
+            )
+            frames = vision_result.get("frames", [])
+            vision_success = True
+            logger.info(f"Visual processing completed successfully. Frame count: {len(frames)}")
+        except Exception as e:
+            logger.error(f"Visual processing pipeline failed: {str(e)}", exc_info=True)
+            # Fail gracefully, continue with audio only
+            frames = []
+            
+        # Raise exception if BOTH pipelines failed
+        if not audio_success and not vision_success:
+            logger.critical("Both audio and vision processing pipelines failed.")
+            raise RuntimeError("Multimodal video processing failed completely: both audio and vision pipelines encountered errors.")
+            
+        # Step 3: Chronological Timeline Merging
+        logger.info("Merging speech and visual segments into timeline...")
+        timeline = merge_timeline(frames, speech_segments)
+        
+        # Cleanup temp audio file
+        try:
+            if temp_audio_path.exists():
+                temp_audio_path.unlink()
+            if temp_dir.exists() and not os.listdir(temp_dir):
+                # Delete directory if empty
+                temp_dir.rmdir()
+        except Exception as ce:
+            logger.warning(f"Failed to clean up temporary audio directory: {str(ce)}")
+            
+        total_time = time.time() - start_time
+        logger.info(f"Multimodal processing completed for {video_file.name} in {total_time:.2f}s")
+        
+        return {
+            "transcript": transcript,
+            "frames": frames,
+            "timeline": timeline
+        }
+
+
+def extract_audio(video_path: Path, output_audio_path: Path) -> bool:
+    """
+    Extracts the audio track from a video file using FFmpeg.
+    """
+    logger.info(f"Extracting audio track from {video_path.name} to {output_audio_path.name}")
+    import static_ffmpeg
+    static_ffmpeg.add_paths()
+    import subprocess
+    cmd = [
+        "ffmpeg", "-y", "-i", str(video_path),
+        "-vn", "-ac", "1", "-ar", "16000",
+        str(output_audio_path)
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return True
+    except Exception as e:
+        logger.error(f"FFmpeg audio extraction failed: {str(e)}")
+        return False
+
+
+def transcribe_audio_track(audio_path: Path) -> tuple[str, list[dict]]:
+    """
+    Transcribes an audio file using the cached faster-whisper model.
+    """
+    from app.api.v1.endpoints.audio import get_whisper_model
+    logger.info(f"Transcribing audio track: {audio_path.name}")
+    model = get_whisper_model()
+    segments, info = model.transcribe(str(audio_path), language="en", task="transcribe")
+    segments_list = list(segments)
+    
+    transcript = " ".join([segment.text for segment in segments_list]).strip()
+    
+    timeline_segments = []
+    for seg in segments_list:
+        timeline_segments.append({
+            "start": round(float(seg.start), 2),
+            "end": round(float(seg.end), 2),
+            "text": seg.text.strip()
+        })
+    return transcript, timeline_segments
+
+
+def merge_timeline(frames: list[dict], speech_segments: list[dict]) -> list[dict]:
+    """
+    Combines speech segments and visual frame captions chronologically.
+    """
+    timeline = []
+    for f in frames:
+        timeline.append({
+            "timestamp": round(f["timestamp"], 2),
+            "type": "vision",
+            "content": f.get("caption", "")
+        })
+    for s in speech_segments:
+        timeline.append({
+            "timestamp": round(s["start"], 2),
+            "type": "speech",
+            "content": s.get("text", "")
+        })
+    # Sort chronologically by timestamp, placing vision events before speech events if timestamps align
+    timeline.sort(key=lambda x: (x["timestamp"], x["type"]))
+    return timeline
+
 
 # Singleton instance
 _video_service_instance = None
@@ -349,3 +507,10 @@ def describe_video(
 ) -> Dict[str, Any]:
     """Helper wrapper function to describe all extracted frames of a video."""
     return get_video_service().describe_video(video_path, interval_seconds, output_dir, cleanup)
+
+def process_video_multimodal(
+    video_path: Union[str, Path],
+    interval_seconds: float = 3.0
+) -> Dict[str, Any]:
+    """Helper wrapper function to perform unified chronological multimodal audio/vision understanding on a video."""
+    return get_video_service().process_video_multimodal(video_path, interval_seconds)

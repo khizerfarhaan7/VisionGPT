@@ -135,6 +135,68 @@ export default function WorkspacePage() {
   const [activeAudioTab, setActiveAudioTab] = useState<"chat" | "transcript">("chat");
   const [transcriptSearch, setTranscriptSearch] = useState("");
 
+  // States for Video Intelligence module
+  const [videoAnalyzeLoading, setVideoAnalyzeLoading] = useState(false);
+  const [videoStage, setVideoStage] = useState("");
+  const [videoDurations, setVideoDurations] = useState<Record<string, number>>({});
+  const [videoIndexResults, setVideoIndexResults] = useState<Record<string, {
+    success: boolean;
+    video_id: string;
+    total_chunks: number;
+    index_location: string;
+    metadata_location: string;
+    processing_time: number;
+  }>>({});
+  const [videoDashboards, setVideoDashboards] = useState<Record<string, {
+    filename: string;
+    duration: number;
+    fps: number;
+    width: number;
+    height: number;
+    total_frames: number;
+    codec: string;
+    total_chunks: number;
+    processing_time: number;
+    transcript: string;
+    timeline: Array<{
+      timestamp: number;
+      type: "vision" | "speech";
+      content: string;
+    }>;
+    frames: Array<{
+      frame_number: number;
+      timestamp: number;
+      filename: string;
+      caption: string;
+    }>;
+  }>>({});
+  const [videoDashboardLoading, setVideoDashboardLoading] = useState<Record<string, boolean>>({});
+  const [activeDashboardTabs, setActiveDashboardTabs] = useState<Record<string, "overview" | "transcript" | "timeline" | "keyframes">>({});
+  const [videoTranscriptSearch, setVideoTranscriptSearch] = useState("");
+  const [selectedKeyframe, setSelectedKeyframe] = useState<{
+    frame_number: number;
+    timestamp: number;
+    filename: string;
+    caption: string;
+  } | null>(null);
+
+  const isVideoFile = (file: { type: string; name: string }) => {
+    return file.type.startsWith("video/") ||
+      file.name.toLowerCase().endsWith(".mp4") ||
+      file.name.toLowerCase().endsWith(".mov") ||
+      file.name.toLowerCase().endsWith(".avi") ||
+      file.name.toLowerCase().endsWith(".mkv") ||
+      file.name.toLowerCase().endsWith(".webm");
+  };
+
+  const isAudioFile = (file: { type: string; name: string }) => {
+    return (file.type.startsWith("audio/") ||
+      file.name.toLowerCase().endsWith(".mp3") ||
+      file.name.toLowerCase().endsWith(".wav") ||
+      file.name.toLowerCase().endsWith(".m4a") ||
+      file.name.toLowerCase().endsWith(".ogg")) && !isVideoFile(file);
+  };
+
   // Toast notification state
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const showToast = (message: string) => {
@@ -155,6 +217,22 @@ export default function WorkspacePage() {
         <mark key={i} className="bg-emerald-500/20 text-emerald-600 dark:text-emerald-300 px-0.5 rounded font-semibold">{part}</mark>
       ) : part
     );
+  };
+
+  const highlightVideoText = (text: string, query: string) => {
+    if (!query) return text;
+    const parts = text.split(new RegExp(`(${query.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')})`, 'gi'));
+    return parts.map((part, i) =>
+      part.toLowerCase() === query.toLowerCase() ? (
+        <mark key={i} className="bg-amber-500/20 text-amber-650 dark:text-amber-300 px-0.5 rounded font-semibold">{part}</mark>
+      ) : part
+    );
+  };
+
+  const formatTime = (seconds: number) => {
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
   };
 
   const chatScrollRef = useRef<HTMLDivElement>(null);
@@ -212,16 +290,12 @@ export default function WorkspacePage() {
 
     // Dynamically route based on type
     const isPdf = fileObj.file.type === "application/pdf" || fileObj.file.name.toLowerCase().endsWith(".pdf");
-    const isAudio = fileObj.file.type.startsWith("audio/") ||
-      fileObj.file.name.toLowerCase().endsWith(".mp3") ||
-      fileObj.file.name.toLowerCase().endsWith(".wav") ||
-      fileObj.file.name.toLowerCase().endsWith(".m4a") ||
-      fileObj.file.name.toLowerCase().endsWith(".ogg") ||
-      fileObj.file.name.toLowerCase().endsWith(".mp4");
+    const isVideo = isVideoFile({ type: fileObj.file.type, name: fileObj.file.name });
+    const isAudio = isAudioFile({ type: fileObj.file.type, name: fileObj.file.name });
 
     const url = isPdf
       ? `${apiBaseUrl}/upload/pdf`
-      : isAudio
+      : (isAudio || isVideo)
         ? `${apiBaseUrl}/upload/audio`
         : `${apiBaseUrl}/upload/image`;
 
@@ -299,6 +373,98 @@ export default function WorkspacePage() {
       }));
     }
   };
+
+  const handleAnalyzeVideo = async (savedName: string) => {
+    if (!activeFileId || videoAnalyzeLoading) return;
+    
+    setVideoAnalyzeLoading(true);
+    setVideoStage("Extracting Frames...");
+    
+    // Setup a timed stage rotator to cycle through stages on the UI
+    const stages = [
+      { text: "Extracting Frames...", delay: 0 },
+      { text: "Generating Captions...", delay: 3500 },
+      { text: "Transcribing Audio...", delay: 7000 },
+      { text: "Building Timeline...", delay: 10500 },
+      { text: "Generating Embeddings...", delay: 13000 },
+      { text: "Indexing...", delay: 15500 }
+    ];
+    
+    const timers: NodeJS.Timeout[] = [];
+    stages.forEach((stage) => {
+      const t = setTimeout(() => {
+        setVideoStage(stage.text);
+      }, stage.delay);
+      timers.push(t);
+    });
+    
+    try {
+      const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+      const response = await fetch(`${apiBaseUrl}/video/index`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ filename: savedName }),
+      });
+      
+      // Clear timers
+      timers.forEach(clearTimeout);
+      
+      if (response.ok) {
+        const data = await response.json();
+        setVideoIndexResults((prev) => ({
+          ...prev,
+          [activeFileId]: data
+        }));
+        if (data.dashboard) {
+          setVideoDashboards((prev) => ({
+            ...prev,
+            [activeFileId]: data.dashboard
+          }));
+        }
+        showToast("Video indexed successfully.");
+      } else {
+        const errJson = await response.json().catch(() => ({}));
+        const errMsg = errJson.detail || "Video indexing failed.";
+        alert(`Analysis Error: ${errMsg}`);
+      }
+    } catch {
+      timers.forEach(clearTimeout);
+      alert("Error contacting the video intelligence service. Please make sure backend is online.");
+    } finally {
+      setVideoAnalyzeLoading(false);
+      setVideoStage("");
+    }
+  };
+
+  const fetchVideoDashboard = async (fileId: string, savedName: string) => {
+    setVideoDashboardLoading((prev) => ({ ...prev, [fileId]: true }));
+    try {
+      const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+      const response = await fetch(`${apiBaseUrl}/video/dashboard?filename=${encodeURIComponent(savedName)}`);
+      if (response.ok) {
+        const data = await response.json();
+        setVideoDashboards((prev) => ({
+          ...prev,
+          [fileId]: data
+        }));
+      }
+    } catch (err) {
+      console.error("Failed to load video dashboard:", err);
+    } finally {
+      setVideoDashboardLoading((prev) => ({ ...prev, [fileId]: false }));
+    }
+  };
+
+  useEffect(() => {
+    if (activeFileId) {
+      const file = selectedFiles.find((f) => f.id === activeFileId);
+      if (file && isVideoFile(file) && file.savedName) {
+        fetchVideoDashboard(file.id, file.savedName);
+      }
+    }
+  }, [activeFileId, selectedFiles]);
 
   const triggerTranscription = async (savedName: string) => {
     if (!activeFileId || transcribeLoading) return;
@@ -634,6 +800,15 @@ export default function WorkspacePage() {
     setTranscribeChunks({});
     setTranscriptSearch("");
     setAudioChatHistories({});
+    setVideoIndexResults({});
+    setVideoAnalyzeLoading(false);
+    setVideoStage("");
+    setVideoDurations({});
+    setVideoDashboards({});
+    setVideoDashboardLoading({});
+    setActiveDashboardTabs({});
+    setVideoTranscriptSearch("");
+    setSelectedKeyframe(null);
     setActiveFileId(null);
 
     const newFiles = files.map((file) => ({
@@ -740,7 +915,388 @@ export default function WorkspacePage() {
         </p>
       </motion.div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      {activeFileId && selectedFiles.find(f => f.id === activeFileId && isVideoFile(f)) && videoDashboardLoading[activeFileId] ? (
+        /* Video Intelligence Dashboard Skeleton Loader */
+        <div className="border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 rounded-3xl p-6 md:p-8 shadow-md flex flex-col space-y-6 animate-pulse">
+          {/* Header Skeleton */}
+          <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-zinc-800/50">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 bg-slate-250 dark:bg-zinc-800 rounded-xl" />
+              <div className="space-y-2">
+                <div className="h-4 w-48 bg-slate-250 dark:bg-zinc-800 rounded-md" />
+                <div className="h-3 w-32 bg-slate-250 dark:bg-zinc-800 rounded-md" />
+              </div>
+            </div>
+            <div className="h-8 w-28 bg-slate-250 dark:bg-zinc-800 rounded-xl" />
+          </div>
+          {/* Grid Skeleton */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            <div className="lg:col-span-5 space-y-4">
+              <div className="aspect-video w-full bg-slate-250 dark:bg-zinc-800 rounded-2xl" />
+              <div className="h-20 w-full bg-slate-250 dark:bg-zinc-800 rounded-2xl" />
+            </div>
+            <div className="lg:col-span-7 h-[400px] bg-slate-200/50 dark:bg-zinc-950/20 border border-slate-250 dark:border-zinc-800 rounded-2xl p-5 flex flex-col space-y-4">
+              <div className="flex gap-2 pb-2 border-b border-slate-200 dark:border-zinc-800/80">
+                <div className="h-8 w-20 bg-slate-250 dark:bg-zinc-800 rounded-xl" />
+                <div className="h-8 w-24 bg-slate-250 dark:bg-zinc-800 rounded-xl" />
+                <div className="h-8 w-20 bg-slate-250 dark:bg-zinc-800 rounded-xl" />
+              </div>
+              <div className="flex-1 space-y-3">
+                <div className="h-4 w-full bg-slate-250 dark:bg-zinc-800 rounded-md" />
+                <div className="h-4 w-5/6 bg-slate-250 dark:bg-zinc-800 rounded-md" />
+                <div className="h-4 w-4/5 bg-slate-250 dark:bg-zinc-800 rounded-md" />
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : activeFileId && selectedFiles.find(f => f.id === activeFileId && isVideoFile(f)) && videoDashboards[activeFileId] ? (
+        /* Video Intelligence Dashboard split view */
+        (() => {
+          const dashboard = videoDashboards[activeFileId];
+          const activeTab = activeDashboardTabs[activeFileId] || "overview";
+          const setActiveTab = (tab: "overview" | "transcript" | "timeline" | "keyframes") => {
+            setActiveDashboardTabs(prev => ({ ...prev, [activeFileId]: tab }));
+          };
+          
+          const getFrameUrl = (filename: string) => {
+            const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+            const backendRootUrl = apiBaseUrl.replace("/api/v1", "");
+            const file = selectedFiles.find(f => f.id === activeFileId);
+            if (!file?.savedName) return "";
+            const videoId = file.savedName.replace(/\.[^/.]+$/, "");
+            return `${backendRootUrl}/uploads/vector_store/video/${videoId}/frames/${filename}`;
+          };
+
+          const seekVideo = (time: number) => {
+            if (videoRef.current) {
+              videoRef.current.currentTime = time;
+              videoRef.current.play().catch(() => {});
+            }
+          };
+
+          const timelineTranscript = dashboard.timeline ? dashboard.timeline.filter(e => e.type === "speech") : [];
+          
+          return (
+            <motion.div
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 rounded-3xl p-6 md:p-8 shadow-md flex flex-col space-y-6 animate-fade-in"
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-zinc-800/50">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-xl bg-amber-500/10 flex items-center justify-center border border-amber-500/20">
+                    <Film className="h-5 w-5 text-amber-500" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-base font-bold tracking-tight text-slate-800 dark:text-zinc-100">Video Intelligence Dashboard</h2>
+                      <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                        ✓ Analyzed
+                      </div>
+                    </div>
+                    <p className="text-xs text-slate-405 dark:text-zinc-500 truncate max-w-[200px] sm:max-w-xs md:max-w-md">
+                      {dashboard.filename}
+                    </p>
+                  </div>
+                </div>
+                
+                <button
+                  onClick={() => setActiveFileId(null)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-500 dark:text-zinc-400 text-xs font-semibold transition-all cursor-pointer"
+                >
+                  <X className="h-3.5 w-3.5" />
+                  <span>Close Dashboard</span>
+                </button>
+              </div>
+
+              {/* Grid content */}
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                {/* Left side: Video Player */}
+                <div className="lg:col-span-5 flex flex-col space-y-4">
+                  <div className="relative rounded-2xl overflow-hidden bg-black border border-slate-100 dark:border-zinc-855 shadow-md">
+                    <video
+                      ref={videoRef}
+                      src={`${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1").replace("/api/v1", "")}/uploads/audio/${selectedFiles.find((f) => f.id === activeFileId)?.savedName}`}
+                      controls
+                      className="w-full max-h-[340px] object-contain focus:outline-none"
+                    />
+                  </div>
+                  
+                  {/* Resolution, duration metadata card */}
+                  <div className="p-4 rounded-2xl bg-slate-50/50 dark:bg-zinc-950/20 border border-slate-100 dark:border-zinc-850 space-y-2">
+                    <h4 className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-wider">Video Details</h4>
+                    <div className="grid grid-cols-2 gap-3 text-xs text-slate-650 dark:text-zinc-400">
+                      <div>Resolution: <span className="font-semibold text-slate-800 dark:text-zinc-200">{dashboard.width} x {dashboard.height}</span></div>
+                      <div>FPS: <span className="font-semibold text-slate-800 dark:text-zinc-200">{dashboard.fps}</span></div>
+                      <div>Codec: <span className="font-semibold text-slate-800 dark:text-zinc-200 uppercase">{dashboard.codec || "unknown"}</span></div>
+                      <div>Duration: <span className="font-semibold text-slate-800 dark:text-zinc-200">{formatTime(dashboard.duration)}</span></div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Right side: Tabs */}
+                <div className="lg:col-span-7 flex flex-col min-h-[460px] border border-slate-100 dark:border-zinc-800/60 rounded-2xl bg-slate-50/50 dark:bg-zinc-950/20 p-5 shadow-inner">
+                  {/* Tab switches */}
+                  <div className="flex border-b border-slate-200 dark:border-zinc-800/80 pb-2 mb-4 overflow-x-auto gap-2">
+                    {[
+                      { id: "overview", label: "Overview", icon: Info },
+                      { id: "transcript", label: "Transcript", icon: FileText },
+                      { id: "timeline", label: "Timeline", icon: Film },
+                      { id: "keyframes", label: "Key Frames", icon: ImageIcon }
+                    ].map(t => {
+                      const Icon = t.icon;
+                      const isActive = activeTab === t.id;
+                      return (
+                        <button
+                          key={t.id}
+                          onClick={() => setActiveTab(t.id as "overview" | "transcript" | "timeline" | "keyframes")}
+                          className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all border-0 cursor-pointer ${
+                            isActive
+                              ? "bg-amber-500 text-white shadow-md shadow-amber-500/15"
+                              : "text-slate-405 hover:text-slate-700 dark:text-zinc-500 dark:hover:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-900/50"
+                          }`}
+                        >
+                          <Icon className="h-3.5 w-3.5" />
+                          <span>{t.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Tab View Content */}
+                  <div className="flex-1 flex flex-col min-h-0">
+                    {/* 1. Overview Tab */}
+                    {activeTab === "overview" && (
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-4 animate-fade-in">
+                        {[
+                          { label: "File Name", value: dashboard.filename, subtitle: "Raw Video File", isLong: true },
+                          { label: "Duration", value: formatTime(dashboard.duration), subtitle: "Timeline Bounds" },
+                          { label: "Resolution", value: `${dashboard.width} x ${dashboard.height}`, subtitle: "Visual Scale" },
+                          { label: "Key Frames", value: dashboard.frames ? dashboard.frames.length.toString() : "0", subtitle: "Florence-2 Extracts" },
+                          { label: "Transcript Words", value: dashboard.transcript ? dashboard.transcript.split(/\s+/).filter(Boolean).length.toString() : "0", subtitle: "Whisper Segments" },
+                          { label: "Semantic Chunks", value: dashboard.total_chunks ? dashboard.total_chunks.toString() : "0", subtitle: "FAISS Vectors" },
+                          { label: "Processing Speed", value: `${dashboard.processing_time}s`, subtitle: "GPU Compute Time" }
+                        ].map((stat, idx) => (
+                          <div
+                            key={idx}
+                            className={`p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200/60 dark:border-zinc-800 shadow-sm space-y-1.5 ${
+                              stat.isLong ? "col-span-2 md:col-span-3" : ""
+                            }`}
+                          >
+                            <p className="text-[10px] font-bold text-slate-400 dark:text-zinc-550 uppercase tracking-wider">{stat.label}</p>
+                            <p className="text-sm font-extrabold text-slate-855 dark:text-zinc-100 truncate">{stat.value}</p>
+                            <p className="text-[9px] text-slate-400 dark:text-zinc-550">{stat.subtitle}</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* 2. Transcript Tab */}
+                    {activeTab === "transcript" && (
+                      <div className="flex-1 flex flex-col min-h-0 space-y-4 animate-fade-in">
+                        {/* Search bar */}
+                        <div className="relative">
+                          <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                          <input
+                            type="text"
+                            value={videoTranscriptSearch}
+                            onChange={(e) => setVideoTranscriptSearch(e.target.value)}
+                            placeholder="Search transcript segment..."
+                            className="w-full pl-9 pr-4 py-2 text-xs border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/30 transition-all"
+                          />
+                        </div>
+
+                        {/* List of segments */}
+                        {timelineTranscript.length > 0 ? (
+                          <div className="flex-1 max-h-[300px] overflow-y-auto space-y-2.5 pr-1 text-xs">
+                            {timelineTranscript
+                              .filter(segment =>
+                                segment.content.toLowerCase().includes(videoTranscriptSearch.toLowerCase())
+                              )
+                              .map((segment, idx) => (
+                                <div
+                                  key={idx}
+                                  className="flex gap-3 p-3 rounded-2xl border border-slate-100 dark:border-zinc-855 bg-white dark:bg-zinc-900 hover:border-amber-500/30 dark:hover:border-amber-500/20 transition-all group"
+                                >
+                                  <button
+                                    onClick={() => seekVideo(segment.timestamp)}
+                                    className="px-2 py-1 h-fit rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold border-0 hover:bg-emerald-500/20 transition-all shrink-0 cursor-pointer text-[10px]"
+                                  >
+                                    {formatTime(segment.timestamp)}
+                                  </button>
+                                  <div className="text-slate-705 dark:text-zinc-300 leading-relaxed pt-0.5">
+                                    {highlightVideoText(segment.content, videoTranscriptSearch)}
+                                  </div>
+                                </div>
+                              ))}
+                          </div>
+                        ) : (
+                          <div className="flex-1 flex flex-col items-center justify-center text-center p-8 text-slate-400 dark:text-zinc-500">
+                            <FileText className="h-8 w-8 mb-2 text-slate-300" />
+                            <p className="text-xs font-semibold">No transcript generated for this video</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* 3. Timeline Tab */}
+                    {activeTab === "timeline" && (
+                      <div className="flex-1 flex flex-col min-h-0 animate-fade-in">
+                        {dashboard.timeline && dashboard.timeline.length > 0 ? (
+                          <div className="flex-1 max-h-[340px] overflow-y-auto space-y-3.5 pr-1 pl-2 border-l border-slate-200 dark:border-zinc-800 text-xs">
+                            {dashboard.timeline.map((event, idx) => {
+                              const isVision = event.type === "vision";
+                              return (
+                                <div key={idx} className="relative flex gap-3 group">
+                                  {/* Bullet point on border line */}
+                                  <div className={`absolute -left-[14px] top-1.5 h-2 w-2 rounded-full border-2 bg-white dark:bg-zinc-900 ${
+                                    isVision ? "border-amber-500" : "border-emerald-500"
+                                  }`} />
+                                  
+                                  {/* Timestamp trigger */}
+                                  <button
+                                    onClick={() => seekVideo(event.timestamp)}
+                                    className={`px-2 py-0.5 h-fit rounded-md text-[10px] font-bold border-0 transition-all shrink-0 cursor-pointer ${
+                                      isVision
+                                        ? "bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"
+                                        : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20"
+                                    }`}
+                                  >
+                                    {formatTime(event.timestamp)}
+                                  </button>
+
+                                  <div className="flex-1 bg-white dark:bg-zinc-900 p-2.5 rounded-xl border border-slate-100 dark:border-zinc-850 hover:border-slate-200 dark:hover:border-zinc-800 transition-all">
+                                    <span className={`inline-flex items-center px-1.5 py-0.2 rounded text-[8px] font-extrabold uppercase mr-1.5 ${
+                                      isVision
+                                        ? "bg-amber-500/10 text-amber-500"
+                                        : "bg-emerald-500/10 text-emerald-500"
+                                    }`}>
+                                      {event.type}
+                                    </span>
+                                    <span className="text-slate-705 dark:text-zinc-300 leading-relaxed font-medium">
+                                      {event.content}
+                                    </span>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="flex-1 flex flex-col items-center justify-center text-center p-8 text-slate-400 dark:text-zinc-500">
+                            <Film className="h-8 w-8 mb-2 text-slate-300" />
+                            <p className="text-xs font-semibold">No timeline events found</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* 4. Key Frames Tab */}
+                    {activeTab === "keyframes" && (
+                      <div className="flex-1 flex flex-col min-h-0 animate-fade-in">
+                        {dashboard.frames && dashboard.frames.length > 0 ? (
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3.5 overflow-y-auto max-h-[340px] pr-1">
+                            {dashboard.frames.map((frame, idx) => (
+                              <div
+                                key={idx}
+                                onClick={() => {
+                                  seekVideo(frame.timestamp);
+                                  setSelectedKeyframe(frame);
+                                }}
+                                className="group relative rounded-xl overflow-hidden border border-slate-200 dark:border-zinc-800/80 bg-white dark:bg-zinc-900 shadow-sm cursor-pointer hover:border-amber-500/40 hover:-translate-y-0.5 transition-all flex flex-col"
+                              >
+                                {/* Frame Thumbnail */}
+                                <div className="relative aspect-video w-full overflow-hidden bg-slate-900">
+                                  <img
+                                    src={getFrameUrl(frame.filename)}
+                                    alt={`Frame ${frame.frame_number}`}
+                                    className="h-full w-full object-cover group-hover:scale-105 transition-all"
+                                  />
+                                  <div className="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 bg-black/65 backdrop-blur-sm rounded text-[9px] font-bold text-white">
+                                    {formatTime(frame.timestamp)}
+                                  </div>
+                                </div>
+                                {/* Frame Caption details */}
+                                <div className="p-2 flex-1">
+                                  <p className="text-[10px] text-slate-700 dark:text-zinc-300 font-semibold line-clamp-2 leading-relaxed">
+                                    {frame.caption}
+                                  </p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="flex-1 flex flex-col items-center justify-center text-center p-8 text-slate-400 dark:text-zinc-500">
+                            <ImageIcon className="h-8 w-8 mb-2 text-slate-300" />
+                            <p className="text-xs font-semibold">No keyframes extracted</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Lightbox enlarge modal for Keyframe */}
+              <AnimatePresence>
+                {selectedKeyframe && (
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+                    onClick={() => setSelectedKeyframe(null)}
+                  >
+                    <motion.div
+                      initial={{ scale: 0.95, y: 15 }}
+                      animate={{ scale: 1, y: 0 }}
+                      exit={{ scale: 0.95, y: 15 }}
+                      transition={{ type: "spring", duration: 0.4 }}
+                      onClick={(e) => e.stopPropagation()}
+                      className="relative max-w-2xl w-full rounded-3xl border border-slate-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 shadow-2xl flex flex-col gap-4 overflow-hidden"
+                    >
+                      {/* Close Button */}
+                      <button
+                        onClick={() => setSelectedKeyframe(null)}
+                        className="absolute top-4 right-4 p-1.5 rounded-xl border border-slate-200 dark:border-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-500 dark:text-zinc-400 z-10 transition-colors cursor-pointer"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+
+                      <div className="flex items-center justify-between pr-10">
+                        <div className="min-w-0">
+                          <h3 className="text-sm font-bold text-slate-805 dark:text-zinc-200">
+                            Keyframe Frame #{selectedKeyframe.frame_number}
+                          </h3>
+                          <p className="text-[10px] text-amber-550 font-semibold">
+                            Timestamp: {formatTime(selectedKeyframe.timestamp)}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="relative rounded-2xl overflow-hidden bg-slate-900 border border-slate-150 dark:border-zinc-900 flex items-center justify-center max-h-[50vh]">
+                        <img
+                          src={getFrameUrl(selectedKeyframe.filename)}
+                          alt={`Enlarged Frame ${selectedKeyframe.frame_number}`}
+                          className="max-h-[45vh] max-w-full object-contain"
+                        />
+                      </div>
+
+                      <div className="p-3 bg-slate-50 dark:bg-zinc-955/40 border border-slate-150 dark:border-zinc-850 rounded-2xl">
+                        <p className="text-[10px] font-bold text-slate-400 dark:text-zinc-550 uppercase tracking-wider mb-1">Florence Caption</p>
+                        <p className="text-xs text-slate-705 dark:text-zinc-300 leading-relaxed font-semibold">
+                          {selectedKeyframe.caption}
+                        </p>
+                      </div>
+                    </motion.div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </motion.div>
+          );
+        })()
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
 
         {/* Left Column: Drag & Drop upload + File formats */}
         <div className="lg:col-span-2 space-y-8">
@@ -885,25 +1441,34 @@ export default function WorkspacePage() {
                                 {activeFileId === file.id ? "Viewing Info" : "Preview"}
                               </button>
                             )}
-                            {(file.type.startsWith("audio/") ||
-                              file.name.toLowerCase().endsWith(".mp3") ||
-                              file.name.toLowerCase().endsWith(".wav") ||
-                              file.name.toLowerCase().endsWith(".m4a") ||
-                              file.name.toLowerCase().endsWith(".ogg") ||
-                              file.name.toLowerCase().endsWith(".mp4")) && (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setActiveFileId(file.id);
-                                  }}
-                                  className={`px-2.5 py-0.5 rounded-md text-[9px] font-bold shadow-sm transition-all transform active:scale-95 cursor-pointer ${activeFileId === file.id
-                                    ? "bg-emerald-600 text-white"
-                                    : "bg-slate-200/80 hover:bg-slate-300/85 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300"
-                                    }`}
-                                >
-                                  {activeFileId === file.id ? "Viewing Audio" : "Preview"}
-                                </button>
-                              )}
+                            {isAudioFile(file) && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveFileId(file.id);
+                                }}
+                                className={`px-2.5 py-0.5 rounded-md text-[9px] font-bold shadow-sm transition-all transform active:scale-95 cursor-pointer ${activeFileId === file.id
+                                  ? "bg-emerald-600 text-white"
+                                  : "bg-slate-200/80 hover:bg-slate-350/80 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300"
+                                  }`}
+                              >
+                                {activeFileId === file.id ? "Viewing Audio" : "Preview"}
+                              </button>
+                            )}
+                            {isVideoFile(file) && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveFileId(file.id);
+                                }}
+                                className={`px-2.5 py-0.5 rounded-md text-[9px] font-bold shadow-sm transition-all transform active:scale-95 cursor-pointer ${activeFileId === file.id
+                                  ? "bg-amber-600 text-white"
+                                  : "bg-slate-200/80 hover:bg-slate-350/80 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300"
+                                  }`}
+                              >
+                                {activeFileId === file.id ? "Viewing Video" : "Preview"}
+                              </button>
+                            )}
                           </div>
                         )}
                         {file.status === "error" && (
@@ -1301,17 +1866,7 @@ export default function WorkspacePage() {
           )}
 
           {/* Audio Preview Card Display */}
-          {activeFileId && selectedFiles.find((f) => {
-            const file = f;
-            return file.id === activeFileId && (
-              file.type.startsWith("audio/") ||
-              file.name.toLowerCase().endsWith(".mp3") ||
-              file.name.toLowerCase().endsWith(".wav") ||
-              file.name.toLowerCase().endsWith(".m4a") ||
-              file.name.toLowerCase().endsWith(".ogg") ||
-              file.name.toLowerCase().endsWith(".mp4")
-            );
-          }) && (
+          {activeFileId && selectedFiles.find((f) => f.id === activeFileId && isAudioFile(f)) && (
               <motion.div
                 initial={{ opacity: 0, y: 15 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -1695,9 +2250,115 @@ export default function WorkspacePage() {
                       )}
                     </button>
                   </div>
+                 )}
+               </motion.div>
+             )}
+
+          {/* Video Preview Card Display */}
+          {activeFileId && selectedFiles.find((f) => f.id === activeFileId && isVideoFile(f)) && (
+            <motion.div
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 rounded-3xl p-6 shadow-sm space-y-5 flex flex-col animate-fade-in"
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-zinc-800/50">
+                <div className="min-w-0">
+                  <h2 className="text-xs font-bold tracking-tight uppercase text-amber-500">Video Intelligence</h2>
+                  <p className="text-[10px] text-slate-400 dark:text-zinc-500 truncate max-w-[180px]">
+                    {selectedFiles.find((f) => f.id === activeFileId)?.name}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setActiveFileId(null)}
+                  className="text-slate-400 hover:text-slate-650 dark:hover:text-zinc-200 cursor-pointer"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {/* Video Details / Player Cover */}
+              <div className="flex flex-col items-center justify-center p-4 border border-slate-100 dark:border-zinc-855 bg-slate-50/50 dark:bg-zinc-950/40 rounded-2xl text-center space-y-3">
+                <div className="h-12 w-12 rounded-2xl bg-amber-500/10 dark:bg-amber-400/10 flex items-center justify-center border border-amber-500/20 shrink-0">
+                  <Film className="h-6 w-6 text-amber-600 dark:text-amber-400" />
+                </div>
+
+                <div className="space-y-0.5 w-full px-2">
+                  <h3 className="text-xs font-bold truncate max-w-full text-slate-800 dark:text-zinc-200">
+                    {selectedFiles.find((f) => f.id === activeFileId)?.name}
+                  </h3>
+                  <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-0.5 text-[9px] text-slate-400 dark:text-zinc-500">
+                    <span>Size: {formatBytes(selectedFiles.find((f) => f.id === activeFileId)?.size || 0)}</span>
+                    <span>•</span>
+                    <span>
+                      Duration: {videoDurations[activeFileId]
+                        ? `${Math.floor(videoDurations[activeFileId] / 60)}:${Math.floor(videoDurations[activeFileId] % 60).toString().padStart(2, "0")}`
+                        : "Reading metadata..."}
+                    </span>
+                  </div>
+                </div>
+
+                {/* HTML5 Video Player */}
+                {selectedFiles.find((f) => f.id === activeFileId)?.savedName && (
+                  <video
+                    ref={videoRef}
+                    src={`${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1").replace("/api/v1", "")}/uploads/audio/${selectedFiles.find((f) => f.id === activeFileId)?.savedName}`}
+                    controls
+                    onLoadedMetadata={(e) => {
+                      const dur = e.currentTarget.duration;
+                      if (dur) {
+                        setVideoDurations((prev) => ({ ...prev, [activeFileId]: dur }));
+                      }
+                    }}
+                    className="w-full max-h-48 rounded-xl mt-1 bg-black focus:outline-none shadow-md border border-slate-100 dark:border-zinc-800"
+                  />
                 )}
-              </motion.div>
-            )}
+              </div>
+
+              {/* Indexing status & Action Button */}
+              {videoIndexResults[activeFileId] ? (
+                <div className="flex-1 flex flex-col min-h-0 space-y-4 animate-fade-in">
+                  {/* Status complete banner */}
+                  <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-[10px] space-y-3">
+                    <div className="flex items-center gap-2 font-bold text-emerald-600 dark:text-emerald-400">
+                      <span>✓ Processing Complete</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-slate-500 dark:text-zinc-450 leading-relaxed">
+                      <div>Video ID: <span className="font-semibold text-slate-700 dark:text-zinc-300 truncate block max-w-[100px]">{videoIndexResults[activeFileId].video_id}</span></div>
+                      <div>Total Chunks: <span className="font-semibold text-slate-700 dark:text-zinc-300">{videoIndexResults[activeFileId].total_chunks}</span></div>
+                      <div>Processing Time: <span className="font-semibold text-slate-700 dark:text-zinc-300">{videoIndexResults[activeFileId].processing_time}s</span></div>
+                      <div>FAISS Index: <span className="font-semibold text-slate-700 dark:text-zinc-300">IndexFlatL2 (384)</span></div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {videoAnalyzeLoading ? (
+                    <div className="flex flex-col items-center justify-center py-6 space-y-4 bg-slate-50/50 dark:bg-zinc-950/40 border border-slate-100 dark:border-zinc-855 rounded-2xl">
+                      <div className="h-8 w-8 animate-spin rounded-full border-3 border-amber-500 border-t-transparent animate-spin" />
+                      <div className="space-y-1 text-center">
+                        <p className="text-xs font-bold text-slate-700 dark:text-zinc-300">{videoStage}</p>
+                        <p className="text-[10px] text-slate-400 dark:text-zinc-500 italic animate-pulse">This may take a moment...</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        const target = selectedFiles.find((f) => f.id === activeFileId);
+                        if (target?.savedName) {
+                          handleAnalyzeVideo(target.savedName);
+                        }
+                      }}
+                      className="w-full py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center gap-2 cursor-pointer border-0"
+                    >
+                      <Sparkles className="h-3.5 w-3.5" />
+                      <span>Analyze Video</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </motion.div>
+          )}
 
           {/* Analysis Results Display as Conversational Chat */}
           {activeFileId && selectedFiles.find((f) => f.id === activeFileId)?.type.startsWith("image/") && (
@@ -1859,7 +2520,8 @@ export default function WorkspacePage() {
           </motion.div>
         </div>
 
-      </div>
+        </div>
+      )}
 
       {/* Image Preview Modal */}
       <AnimatePresence>

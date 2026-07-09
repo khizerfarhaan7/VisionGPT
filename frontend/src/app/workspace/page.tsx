@@ -171,7 +171,7 @@ export default function WorkspacePage() {
     }>;
   }>>({});
   const [videoDashboardLoading, setVideoDashboardLoading] = useState<Record<string, boolean>>({});
-  const [activeDashboardTabs, setActiveDashboardTabs] = useState<Record<string, "overview" | "transcript" | "timeline" | "keyframes">>({});
+  const [activeDashboardTabs, setActiveDashboardTabs] = useState<Record<string, "overview" | "transcript" | "timeline" | "keyframes" | "chat">>({});
   const [videoTranscriptSearch, setVideoTranscriptSearch] = useState("");
   const [selectedKeyframe, setSelectedKeyframe] = useState<{
     frame_number: number;
@@ -179,6 +179,23 @@ export default function WorkspacePage() {
     filename: string;
     caption: string;
   } | null>(null);
+
+  // States for Video RAG conversational chat module
+  interface VideoChatMessage {
+    role: "user" | "assistant";
+    content: string;
+    sources?: Array<{
+      chunk_id: string;
+      page: string;
+      start_time: number;
+      end_time: number;
+      similarity_score: number;
+    }>;
+    error?: boolean;
+  }
+  const [videoChatHistories, setVideoChatHistories] = useState<Record<string, VideoChatMessage[]>>({});
+  const [videoChatInput, setVideoChatInput] = useState("");
+  const [videoChatLoading, setVideoChatLoading] = useState(false);
 
   const isVideoFile = (file: { type: string; name: string }) => {
     return file.type.startsWith("video/") ||
@@ -238,6 +255,7 @@ export default function WorkspacePage() {
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const pdfChatScrollRef = useRef<HTMLDivElement>(null);
   const audioChatScrollRef = useRef<HTMLDivElement>(null);
+  const videoChatScrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isUploading = selectedFiles.some((f) => f.status === "uploading");
@@ -262,6 +280,13 @@ export default function WorkspacePage() {
       audioChatScrollRef.current.scrollTop = audioChatScrollRef.current.scrollHeight;
     }
   }, [audioChatHistories, audioChatLoading, activeAudioTab, activeFileId]);
+
+  // Scroll to bottom of Video RAG chat history
+  useEffect(() => {
+    if (videoChatScrollRef.current) {
+      videoChatScrollRef.current.scrollTop = videoChatScrollRef.current.scrollHeight;
+    }
+  }, [videoChatHistories, videoChatLoading, activeDashboardTabs, activeFileId]);
 
   const toggleChunk = (chunkId: string) => {
     setExpandedChunks((prev) => ({ ...prev, [chunkId]: !prev[chunkId] }));
@@ -787,6 +812,96 @@ export default function WorkspacePage() {
     }
   };
 
+  const handleSendVideoMessage = async (retryMessageContent?: string) => {
+    if (!activeFileId || videoChatLoading) return;
+
+    const targetFile = selectedFiles.find((f) => f.id === activeFileId);
+    if (!targetFile) return;
+
+    const userMessageContent = retryMessageContent !== undefined ? retryMessageContent : videoChatInput.trim();
+    if (!userMessageContent) return;
+    
+    if (retryMessageContent === undefined) {
+      setVideoChatInput("");
+    }
+
+    const userMessage: VideoChatMessage = { role: "user", content: userMessageContent };
+    
+    // Get history excluding any errors
+    let currentHistory = videoChatHistories[activeFileId] || [];
+    if (retryMessageContent !== undefined) {
+      // If retrying, remove the last assistant error message if it exists
+      const lastMsg = currentHistory[currentHistory.length - 1];
+      if (lastMsg && lastMsg.role === "assistant" && lastMsg.error) {
+        currentHistory = currentHistory.slice(0, -1);
+      }
+    } else {
+      currentHistory = [...currentHistory, userMessage];
+    }
+
+    setVideoChatHistories((prev) => ({
+      ...prev,
+      [activeFileId]: currentHistory
+    }));
+
+    setVideoChatLoading(true);
+
+    try {
+      const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+      const response = await fetch(`${apiBaseUrl}/video/chat`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          filename: targetFile.savedName || targetFile.name,
+          question: userMessageContent,
+          history: currentHistory
+            .filter((m) => !m.error)
+            .map((m) => ({ role: m.role, content: m.content }))
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const assistantMessage: VideoChatMessage = {
+          role: "assistant",
+          content: data.answer,
+          sources: data.sources
+        };
+
+        setVideoChatHistories((prev) => ({
+          ...prev,
+          [activeFileId]: [...(prev[activeFileId] || []), assistantMessage]
+        }));
+      } else {
+        const errJson = await response.json().catch(() => ({}));
+        const errMsg = errJson.detail || "Failed to process Video Chat response.";
+        const assistantMessage: VideoChatMessage = {
+          role: "assistant",
+          content: errMsg,
+          error: true
+        };
+        setVideoChatHistories((prev) => ({
+          ...prev,
+          [activeFileId]: [...(prev[activeFileId] || []), assistantMessage]
+        }));
+      }
+    } catch {
+      const assistantMessage: VideoChatMessage = {
+        role: "assistant",
+        content: "Unable to contact Video AI.",
+        error: true
+      };
+      setVideoChatHistories((prev) => ({
+        ...prev,
+        [activeFileId]: [...(prev[activeFileId] || []), assistantMessage]
+      }));
+    } finally {
+      setVideoChatLoading(false);
+    }
+  };
+
   const handleFilesAdded = (files: File[]) => {
     // Preserve chat histories until new files are uploaded, then clear them
     setChatHistories({});
@@ -809,6 +924,9 @@ export default function WorkspacePage() {
     setActiveDashboardTabs({});
     setVideoTranscriptSearch("");
     setSelectedKeyframe(null);
+    setVideoChatHistories({});
+    setVideoChatInput("");
+    setVideoChatLoading(false);
     setActiveFileId(null);
 
     const newFiles = files.map((file) => ({
@@ -954,7 +1072,7 @@ export default function WorkspacePage() {
         (() => {
           const dashboard = videoDashboards[activeFileId];
           const activeTab = activeDashboardTabs[activeFileId] || "overview";
-          const setActiveTab = (tab: "overview" | "transcript" | "timeline" | "keyframes") => {
+          const setActiveTab = (tab: "overview" | "transcript" | "timeline" | "keyframes" | "chat") => {
             setActiveDashboardTabs(prev => ({ ...prev, [activeFileId]: tab }));
           };
           
@@ -1043,14 +1161,15 @@ export default function WorkspacePage() {
                       { id: "overview", label: "Overview", icon: Info },
                       { id: "transcript", label: "Transcript", icon: FileText },
                       { id: "timeline", label: "Timeline", icon: Film },
-                      { id: "keyframes", label: "Key Frames", icon: ImageIcon }
+                      { id: "keyframes", label: "Key Frames", icon: ImageIcon },
+                      { id: "chat", label: "Chat", icon: Sparkles }
                     ].map(t => {
                       const Icon = t.icon;
                       const isActive = activeTab === t.id;
                       return (
                         <button
                           key={t.id}
-                          onClick={() => setActiveTab(t.id as "overview" | "transcript" | "timeline" | "keyframes")}
+                          onClick={() => setActiveTab(t.id as "overview" | "transcript" | "timeline" | "keyframes" | "chat")}
                           className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all border-0 cursor-pointer ${
                             isActive
                               ? "bg-amber-500 text-white shadow-md shadow-amber-500/15"
@@ -1231,6 +1350,130 @@ export default function WorkspacePage() {
                             <p className="text-xs font-semibold">No keyframes extracted</p>
                           </div>
                         )}
+                      </div>
+                    )}
+
+                    {/* 5. Chat Tab */}
+                    {activeTab === "chat" && (
+                      <div className="flex-1 flex flex-col min-h-0 space-y-4 animate-fade-in">
+                        {/* Conversation Area */}
+                        <div
+                          ref={videoChatScrollRef}
+                          className="flex-1 overflow-y-auto space-y-3.5 pr-1 text-xs max-h-[300px]"
+                        >
+                          {/* Initial message */}
+                          <div className="flex flex-col space-y-1">
+                            <span className="font-extrabold text-amber-500 flex items-center gap-1">
+                              🤖 VisionGPT
+                            </span>
+                            <div className="p-3.5 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200/60 dark:border-zinc-800 leading-relaxed text-slate-700 dark:text-zinc-300">
+                              Hello! Ask me anything about this video.
+                            </div>
+                          </div>
+
+                          {(videoChatHistories[activeFileId] || []).map((msg, index) => {
+                            const isUser = msg.role === "user";
+                            return (
+                              <div key={index} className="flex flex-col space-y-1">
+                                <span className={`font-extrabold flex items-center gap-1 ${
+                                  isUser ? "text-indigo-500" : "text-amber-500"
+                                }`}>
+                                  {isUser ? "👤 User" : "🤖 VisionGPT"}
+                                </span>
+                                <div className={`p-3.5 rounded-2xl border leading-relaxed text-slate-750 dark:text-zinc-350 ${
+                                  isUser
+                                    ? "bg-indigo-500/5 border-indigo-500/10 dark:border-indigo-500/15"
+                                    : msg.error
+                                      ? "bg-red-500/5 border-red-500/20 text-red-650 dark:text-red-400"
+                                      : "bg-white dark:bg-zinc-900 border-slate-200/60 dark:border-zinc-800"
+                                }`}>
+                                  <div className="whitespace-pre-wrap">{msg.content}</div>
+
+                                  {/* Referenced sources timeline citation links */}
+                                  {!isUser && msg.sources && msg.sources.length > 0 && (
+                                    <div className="mt-3.5 pt-3 border-t border-slate-100 dark:border-zinc-800/80 space-y-2">
+                                      <p className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-wider">
+                                        Referenced Timeline
+                                      </p>
+                                      <div className="flex flex-wrap gap-2">
+                                        {msg.sources.map((source, sIdx) => (
+                                          <button
+                                            key={sIdx}
+                                            onClick={() => seekVideo(source.start_time)}
+                                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-[10px] font-bold text-slate-650 dark:text-zinc-300 transition-all border-0 cursor-pointer"
+                                          >
+                                            {formatTime(source.start_time)} → {formatTime(source.end_time)}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {/* Retry button for errors */}
+                                  {!isUser && msg.error && (
+                                    <div className="mt-2 flex">
+                                      <button
+                                        onClick={() => {
+                                          const history = videoChatHistories[activeFileId] || [];
+                                          const userMsgs = history.filter((m) => m.role === "user");
+                                          if (userMsgs.length > 0) {
+                                            const lastUserContent = userMsgs[userMsgs.length - 1].content;
+                                            handleSendVideoMessage(lastUserContent);
+                                          }
+                                        }}
+                                        className="px-3.5 py-1.5 rounded-xl bg-red-500 hover:bg-red-655 text-white font-bold text-[10px] border-0 transition-all cursor-pointer"
+                                      >
+                                        Retry Request
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+
+                          {/* Loading indicator */}
+                          {videoChatLoading && (
+                            <div className="flex flex-col space-y-1 animate-pulse">
+                              <span className="font-extrabold text-amber-500">🤖 VisionGPT</span>
+                              <div className="p-3.5 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200/60 dark:border-zinc-800 text-slate-400 dark:text-zinc-500 flex items-center gap-2">
+                                <div className="h-2 w-2 animate-bounce rounded-full bg-amber-500" />
+                                <div className="h-2 w-2 animate-bounce rounded-full bg-amber-500 [animation-delay:0.2s]" />
+                                <div className="h-2 w-2 animate-bounce rounded-full bg-amber-500 [animation-delay:0.4s]" />
+                                <span className="ml-1 text-[11px] font-semibold text-slate-500 dark:text-zinc-400">
+                                  VisionGPT is analyzing the video...
+                                </span>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Input Box Area */}
+                        <div className="flex gap-2 pt-2 border-t border-slate-200 dark:border-zinc-800/80 shrink-0">
+                          <textarea
+                            value={videoChatInput}
+                            onChange={(e) => setVideoChatInput(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && !e.shiftKey) {
+                                e.preventDefault();
+                                if (!videoChatLoading && videoChatInput.trim()) {
+                                  handleSendVideoMessage();
+                                }
+                              }
+                            }}
+                            placeholder="Ask anything about this video..."
+                            disabled={videoChatLoading}
+                            rows={1}
+                            className="flex-1 px-3.5 py-2.5 rounded-xl text-xs border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30 disabled:opacity-60 transition-all resize-none max-h-20"
+                          />
+                          <button
+                            onClick={() => handleSendVideoMessage()}
+                            disabled={videoChatLoading || !videoChatInput.trim()}
+                            className="px-4.5 py-2 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 hover:to-orange-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-[11px] font-bold shadow-md hover:shadow-orange-500/20 hover:shadow-lg transition-all shrink-0 flex items-center justify-center cursor-pointer border-0"
+                          >
+                            Send
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>

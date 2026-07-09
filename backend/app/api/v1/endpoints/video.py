@@ -1,5 +1,6 @@
 import os
 import time
+import json
 import logging
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, status
@@ -40,6 +41,35 @@ async def index_video(payload: VideoIndexRequestSchema):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Video indexing failed: {str(e)}"
+        )
+
+@router.get("/dashboard", status_code=status.HTTP_200_OK)
+async def get_video_dashboard(filename: str):
+    """
+    Retrieves the parsed multimodal timeline, frames, and transcript
+    metadata for an indexed video to populate the frontend dashboard.
+    """
+    safe_filename = os.path.basename(filename)
+    video_id = os.path.splitext(safe_filename)[0]
+    
+    vector_store_dir = Path(settings.UPLOAD_DIR) / "vector_store" / "video" / video_id
+    dashboard_path = vector_store_dir / "metadata_dashboard.json"
+    
+    if not dashboard_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Video dashboard metadata not found. Please index the video first."
+        )
+        
+    try:
+        with open(dashboard_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data
+    except Exception as e:
+        logger.exception("Failed to read video dashboard metadata")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load dashboard: {str(e)}"
         )
 
 @router.post("/chat", response_model=VideoChatResponseSchema, status_code=status.HTTP_200_OK)

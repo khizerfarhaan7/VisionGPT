@@ -321,7 +321,9 @@ class VideoService:
     def process_video_multimodal(
         self,
         video_path: Union[str, Path],
-        interval_seconds: float = 3.0
+        interval_seconds: float = 3.0,
+        persistent_frames_dir: Optional[Path] = None,
+        cleanup: bool = True
     ) -> Dict[str, Any]:
         """
         Processes a video file, extracting visual frame captions and spoken audio
@@ -369,11 +371,12 @@ class VideoService:
         vision_success = False
         try:
             logger.info("Running visual frame extraction and captioning...")
+            frames_output_dir = persistent_frames_dir if persistent_frames_dir else (temp_dir / "frames")
             vision_result = self.describe_video(
                 video_path=video_file,
                 interval_seconds=interval_seconds,
-                output_dir=temp_dir / "frames",
-                cleanup=True  # Automatically cleans up frame jpg files
+                output_dir=frames_output_dir,
+                cleanup=cleanup  # Decides whether to clean up frame jpg files
             )
             frames = vision_result.get("frames", [])
             vision_success = True
@@ -432,9 +435,20 @@ class VideoService:
         video_file = Path(video_path)
         video_id = video_file.stem
         
-        # Step 1: Multimodal Processing
+        # Step 0: Ensure vector store and persistent frames directory exists
+        vector_store_dir = Path(settings.UPLOAD_DIR) / "vector_store" / "video" / video_id
+        vector_store_dir.mkdir(parents=True, exist_ok=True)
+        persistent_frames_dir = vector_store_dir / "frames"
+        persistent_frames_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Step 1: Multimodal Processing with persistent frames folder
         logger.info(f"Step 1: Running multimodal audio/vision timeline generation for: {video_file.name}")
-        pipeline_result = self.process_video_multimodal(video_file, interval_seconds)
+        pipeline_result = self.process_video_multimodal(
+            video_file,
+            interval_seconds,
+            persistent_frames_dir=persistent_frames_dir,
+            cleanup=False
+        )
         
         timeline = pipeline_result["timeline"]
         full_transcript = pipeline_result["transcript"]
@@ -445,13 +459,10 @@ class VideoService:
         chunks = chunk_multimodal_timeline(timeline, window_size)
         logger.info(f"Created {len(chunks)} multimodal semantic chunks.")
         
-        # Step 3: Vector Indexing
-        vector_store_dir = Path(settings.UPLOAD_DIR) / "vector_store" / "video" / video_id
-        vector_store_dir.mkdir(parents=True, exist_ok=True)
-        
         index_path = vector_store_dir / "faiss.index"
         metadata_path = vector_store_dir / "metadata.json"
         
+        # Step 3: Vector Indexing
         logger.info(f"Step 3: Generating embeddings for {len(chunks)} chunks and saving FAISS index...")
         try:
             if len(chunks) > 0:
@@ -480,13 +491,40 @@ class VideoService:
             total_time = time.time() - start_time
             logger.info(f"Successfully built FAISS index and metadata.json in {total_time:.2f}s.")
             
+            # Step 5: Gather metadata details and write metadata_dashboard.json
+            try:
+                video_meta = self.get_video_metadata(video_file)
+            except Exception as me:
+                logger.warning(f"Could not parse video metadata for dashboard: {str(me)}")
+                video_meta = {}
+                
+            dashboard_data = {
+                "filename": video_file.name,
+                "duration": video_meta.get("duration", 0.0),
+                "fps": video_meta.get("fps", 0.0),
+                "width": video_meta.get("width", 0),
+                "height": video_meta.get("height", 0),
+                "total_frames": video_meta.get("total_frames", 0),
+                "codec": video_meta.get("codec", "unknown"),
+                "total_chunks": len(chunks),
+                "processing_time": round(total_time, 2),
+                "transcript": full_transcript,
+                "timeline": timeline,
+                "frames": raw_frames
+            }
+            
+            dashboard_path = vector_store_dir / "metadata_dashboard.json"
+            with open(dashboard_path, "w", encoding="utf-8") as f:
+                json.dump(dashboard_data, f, ensure_ascii=False, indent=2)
+                
             return {
                 "success": True,
                 "video_id": video_id,
                 "total_chunks": len(chunks),
                 "index_location": str(index_path),
                 "metadata_location": str(metadata_path),
-                "processing_time": round(total_time, 2)
+                "processing_time": round(total_time, 2),
+                "dashboard": dashboard_data
             }
             
         except Exception as e:

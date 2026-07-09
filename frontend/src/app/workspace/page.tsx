@@ -81,6 +81,142 @@ interface PDFChatMessage {
   }[];
 }
 
+interface KeyframeCardProps {
+  frame: {
+    frame_number: number;
+    timestamp: number;
+    filename: string;
+    caption: string;
+  };
+  getFrameUrl: (filename: string) => string;
+  formatTime: (seconds: number) => string;
+  seekVideo: (time: number) => void;
+  setSelectedKeyframe: (frame: {
+    frame_number: number;
+    timestamp: number;
+    filename: string;
+    caption: string;
+  } | null) => void;
+}
+
+const KeyframeCard: React.FC<KeyframeCardProps> = ({
+  frame,
+  getFrameUrl,
+  formatTime,
+  seekVideo,
+  setSelectedKeyframe
+}) => {
+  const [status, setStatus] = useState<"loading" | "loaded" | "error">("loading");
+  const imgRef = useRef<HTMLImageElement>(null);
+  const imgUrl = getFrameUrl(frame.filename);
+  console.log(
+    frame.filename,
+    "status =", status,
+    "complete =", imgRef.current?.complete,
+    "width =", imgRef.current?.naturalWidth,
+    "height =", imgRef.current?.naturalHeight
+  );
+
+
+  useEffect(() => {
+    console.log("filename effect", frame.filename);
+    setStatus("loading");
+  }, [frame.filename]);
+
+  // Fix: For browser-cached images, the `load` event fires synchronously
+  // during `img.src` assignment — before React has attached its synthetic
+  // event listener — so onLoad is silently missed.
+  // After React commits to the DOM, check img.complete to catch that case.
+  useEffect(() => {
+    const img = imgRef.current;
+    if (!img) return;
+    if (img.complete) {
+      if (img.naturalWidth > 0) {
+        setStatus("loaded");
+      } else {
+        setStatus("error");
+      }
+    }
+  }, []);
+
+  // DIAGNOSTIC: reads live DOM after every status commit — answers all 5 questions
+  useEffect(() => {
+    const img = imgRef.current;
+    const cs = img ? window.getComputedStyle(img) : null;
+    const parent = img?.parentElement;
+    const pcs = parent ? window.getComputedStyle(parent) : null;
+    console.warn(`[DOM after status="${status}"] ${frame.filename}`, {
+      // Q1: Does <img> className still contain opacity-0?
+      imgClass: img?.className,
+      // Q1 + Q4: Computed opacity and position
+      computedOpacity: cs?.opacity,
+      computedPosition: cs?.position,
+      computedDisplay: cs?.display,
+      computedVisibility: cs?.visibility,
+      // Q4: Actual rendered pixel dimensions
+      offsetW: img?.offsetWidth,
+      offsetH: img?.offsetHeight,
+      // Q3: Is the skeleton still in the DOM? (sibling count before img)
+      siblingsBeforeImg: img
+        ? Array.from(parent?.children ?? []).indexOf(img)
+        : null,
+      // Q4: Parent computed overflow, display, dimensions
+      parentOverflow: pcs?.overflow,
+      parentH: parent?.offsetHeight,
+      parentW: parent?.offsetWidth,
+    });
+  }, [status, frame.filename]);
+
+
+  return (
+    <div
+      onClick={() => {
+        seekVideo(frame.timestamp);
+        setSelectedKeyframe(frame);
+      }}
+      className="group relative rounded-xl overflow-hidden border border-slate-200 dark:border-zinc-800/80 bg-white dark:bg-zinc-900 shadow-sm cursor-pointer hover:border-amber-500/40 hover:-translate-y-0.5 transition-all flex flex-col h-full"
+    >
+      {/* Frame Thumbnail Wrapper */}
+      <div className="relative aspect-video w-full overflow-hidden bg-slate-900 flex items-center justify-center">
+        {status === "loading" && (
+          <div className="absolute inset-0 bg-slate-200 dark:bg-zinc-800 animate-pulse flex items-center justify-center text-[10px] text-slate-400 dark:text-zinc-500">
+            Loading...
+          </div>
+        )}
+        {status === "error" && (
+          <div className="absolute inset-0 bg-slate-105 dark:bg-zinc-950 flex flex-col items-center justify-center text-[10px] text-slate-450 dark:text-zinc-500 p-2 text-center">
+            <span>Image unavailable</span>
+          </div>
+        )}
+
+        <img
+          ref={imgRef}
+          src={imgUrl}
+          alt={`Frame ${frame.frame_number}`}
+          onLoad={() => {
+            console.log("LOAD", frame.filename);
+            setStatus("loaded");
+          }}
+          onError={() => {
+            console.log("ERROR", frame.filename);
+            setStatus("error");
+          }}
+          className={`absolute inset-0 h-full w-full object-cover group-hover:scale-105 transition-all duration-300 ${status === "loaded" ? "opacity-100" : "opacity-0"}`}
+        />
+        <div className="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 bg-black/65 backdrop-blur-sm rounded text-[9px] font-bold text-white z-10">
+          {formatTime(frame.timestamp)}
+        </div>
+      </div>
+      {/* Frame Caption details */}
+      <div className="p-2 flex-1 flex flex-col justify-center">
+        <p className="text-[10px] text-slate-705 dark:text-zinc-300 font-semibold line-clamp-2 leading-relaxed">
+          {frame.caption}
+        </p>
+      </div>
+    </div>
+  );
+};
+
 export default function WorkspacePage() {
   const [isDragActive, setIsDragActive] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<SelectedFile[]>([]);
@@ -401,10 +537,10 @@ export default function WorkspacePage() {
 
   const handleAnalyzeVideo = async (savedName: string) => {
     if (!activeFileId || videoAnalyzeLoading) return;
-    
+
     setVideoAnalyzeLoading(true);
     setVideoStage("Extracting Frames...");
-    
+
     // Setup a timed stage rotator to cycle through stages on the UI
     const stages = [
       { text: "Extracting Frames...", delay: 0 },
@@ -414,7 +550,7 @@ export default function WorkspacePage() {
       { text: "Generating Embeddings...", delay: 13000 },
       { text: "Indexing...", delay: 15500 }
     ];
-    
+
     const timers: NodeJS.Timeout[] = [];
     stages.forEach((stage) => {
       const t = setTimeout(() => {
@@ -422,7 +558,7 @@ export default function WorkspacePage() {
       }, stage.delay);
       timers.push(t);
     });
-    
+
     try {
       const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
       const response = await fetch(`${apiBaseUrl}/video/index`, {
@@ -432,10 +568,10 @@ export default function WorkspacePage() {
         },
         body: JSON.stringify({ filename: savedName }),
       });
-      
+
       // Clear timers
       timers.forEach(clearTimeout);
-      
+
       if (response.ok) {
         const data = await response.json();
         setVideoIndexResults((prev) => ({
@@ -820,13 +956,13 @@ export default function WorkspacePage() {
 
     const userMessageContent = retryMessageContent !== undefined ? retryMessageContent : videoChatInput.trim();
     if (!userMessageContent) return;
-    
+
     if (retryMessageContent === undefined) {
       setVideoChatInput("");
     }
 
     const userMessage: VideoChatMessage = { role: "user", content: userMessageContent };
-    
+
     // Get history excluding any errors
     let currentHistory = videoChatHistories[activeFileId] || [];
     if (retryMessageContent !== undefined) {
@@ -1075,7 +1211,7 @@ export default function WorkspacePage() {
           const setActiveTab = (tab: "overview" | "transcript" | "timeline" | "keyframes" | "chat") => {
             setActiveDashboardTabs(prev => ({ ...prev, [activeFileId]: tab }));
           };
-          
+
           const getFrameUrl = (filename: string) => {
             const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
             const backendRootUrl = apiBaseUrl.replace("/api/v1", "");
@@ -1088,12 +1224,12 @@ export default function WorkspacePage() {
           const seekVideo = (time: number) => {
             if (videoRef.current) {
               videoRef.current.currentTime = time;
-              videoRef.current.play().catch(() => {});
+              videoRef.current.play().catch(() => { });
             }
           };
 
           const timelineTranscript = dashboard.timeline ? dashboard.timeline.filter(e => e.type === "speech") : [];
-          
+
           return (
             <motion.div
               initial={{ opacity: 0, y: 15 }}
@@ -1118,7 +1254,7 @@ export default function WorkspacePage() {
                     </p>
                   </div>
                 </div>
-                
+
                 <button
                   onClick={() => setActiveFileId(null)}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-500 dark:text-zinc-400 text-xs font-semibold transition-all cursor-pointer"
@@ -1140,7 +1276,7 @@ export default function WorkspacePage() {
                       className="w-full max-h-[340px] object-contain focus:outline-none"
                     />
                   </div>
-                  
+
                   {/* Resolution, duration metadata card */}
                   <div className="p-4 rounded-2xl bg-slate-50/50 dark:bg-zinc-950/20 border border-slate-100 dark:border-zinc-850 space-y-2">
                     <h4 className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-wider">Video Details</h4>
@@ -1170,11 +1306,10 @@ export default function WorkspacePage() {
                         <button
                           key={t.id}
                           onClick={() => setActiveTab(t.id as "overview" | "transcript" | "timeline" | "keyframes" | "chat")}
-                          className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all border-0 cursor-pointer ${
-                            isActive
-                              ? "bg-amber-500 text-white shadow-md shadow-amber-500/15"
-                              : "text-slate-405 hover:text-slate-700 dark:text-zinc-500 dark:hover:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-900/50"
-                          }`}
+                          className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all border-0 cursor-pointer ${isActive
+                            ? "bg-amber-500 text-white shadow-md shadow-amber-500/15"
+                            : "text-slate-405 hover:text-slate-700 dark:text-zinc-500 dark:hover:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-900/50"
+                            }`}
                         >
                           <Icon className="h-3.5 w-3.5" />
                           <span>{t.label}</span>
@@ -1199,9 +1334,8 @@ export default function WorkspacePage() {
                         ].map((stat, idx) => (
                           <div
                             key={idx}
-                            className={`p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200/60 dark:border-zinc-800 shadow-sm space-y-1.5 ${
-                              stat.isLong ? "col-span-2 md:col-span-3" : ""
-                            }`}
+                            className={`p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200/60 dark:border-zinc-800 shadow-sm space-y-1.5 ${stat.isLong ? "col-span-2 md:col-span-3" : ""
+                              }`}
                           >
                             <p className="text-[10px] font-bold text-slate-400 dark:text-zinc-550 uppercase tracking-wider">{stat.label}</p>
                             <p className="text-sm font-extrabold text-slate-855 dark:text-zinc-100 truncate">{stat.value}</p>
@@ -1269,28 +1403,25 @@ export default function WorkspacePage() {
                               return (
                                 <div key={idx} className="relative flex gap-3 group">
                                   {/* Bullet point on border line */}
-                                  <div className={`absolute -left-[14px] top-1.5 h-2 w-2 rounded-full border-2 bg-white dark:bg-zinc-900 ${
-                                    isVision ? "border-amber-500" : "border-emerald-500"
-                                  }`} />
-                                  
+                                  <div className={`absolute -left-[14px] top-1.5 h-2 w-2 rounded-full border-2 bg-white dark:bg-zinc-900 ${isVision ? "border-amber-500" : "border-emerald-500"
+                                    }`} />
+
                                   {/* Timestamp trigger */}
                                   <button
                                     onClick={() => seekVideo(event.timestamp)}
-                                    className={`px-2 py-0.5 h-fit rounded-md text-[10px] font-bold border-0 transition-all shrink-0 cursor-pointer ${
-                                      isVision
-                                        ? "bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"
-                                        : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20"
-                                    }`}
+                                    className={`px-2 py-0.5 h-fit rounded-md text-[10px] font-bold border-0 transition-all shrink-0 cursor-pointer ${isVision
+                                      ? "bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"
+                                      : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20"
+                                      }`}
                                   >
                                     {formatTime(event.timestamp)}
                                   </button>
 
                                   <div className="flex-1 bg-white dark:bg-zinc-900 p-2.5 rounded-xl border border-slate-100 dark:border-zinc-850 hover:border-slate-200 dark:hover:border-zinc-800 transition-all">
-                                    <span className={`inline-flex items-center px-1.5 py-0.2 rounded text-[8px] font-extrabold uppercase mr-1.5 ${
-                                      isVision
-                                        ? "bg-amber-500/10 text-amber-500"
-                                        : "bg-emerald-500/10 text-emerald-500"
-                                    }`}>
+                                    <span className={`inline-flex items-center px-1.5 py-0.2 rounded text-[8px] font-extrabold uppercase mr-1.5 ${isVision
+                                      ? "bg-amber-500/10 text-amber-500"
+                                      : "bg-emerald-500/10 text-emerald-500"
+                                      }`}>
                                       {event.type}
                                     </span>
                                     <span className="text-slate-705 dark:text-zinc-300 leading-relaxed font-medium">
@@ -1314,34 +1445,16 @@ export default function WorkspacePage() {
                     {activeTab === "keyframes" && (
                       <div className="flex-1 flex flex-col min-h-0 animate-fade-in">
                         {dashboard.frames && dashboard.frames.length > 0 ? (
-                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3.5 overflow-y-auto max-h-[340px] pr-1">
+                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5 overflow-y-auto h-[340px] pr-1">
                             {dashboard.frames.map((frame, idx) => (
-                              <div
-                                key={idx}
-                                onClick={() => {
-                                  seekVideo(frame.timestamp);
-                                  setSelectedKeyframe(frame);
-                                }}
-                                className="group relative rounded-xl overflow-hidden border border-slate-200 dark:border-zinc-800/80 bg-white dark:bg-zinc-900 shadow-sm cursor-pointer hover:border-amber-500/40 hover:-translate-y-0.5 transition-all flex flex-col"
-                              >
-                                {/* Frame Thumbnail */}
-                                <div className="relative aspect-video w-full overflow-hidden bg-slate-900">
-                                  <img
-                                    src={getFrameUrl(frame.filename)}
-                                    alt={`Frame ${frame.frame_number}`}
-                                    className="h-full w-full object-cover group-hover:scale-105 transition-all"
-                                  />
-                                  <div className="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 bg-black/65 backdrop-blur-sm rounded text-[9px] font-bold text-white">
-                                    {formatTime(frame.timestamp)}
-                                  </div>
-                                </div>
-                                {/* Frame Caption details */}
-                                <div className="p-2 flex-1">
-                                  <p className="text-[10px] text-slate-700 dark:text-zinc-300 font-semibold line-clamp-2 leading-relaxed">
-                                    {frame.caption}
-                                  </p>
-                                </div>
-                              </div>
+                              <KeyframeCard
+                                key={frame.filename}
+                                frame={frame}
+                                getFrameUrl={getFrameUrl}
+                                formatTime={formatTime}
+                                seekVideo={seekVideo}
+                                setSelectedKeyframe={setSelectedKeyframe}
+                              />
                             ))}
                           </div>
                         ) : (
@@ -1375,18 +1488,16 @@ export default function WorkspacePage() {
                             const isUser = msg.role === "user";
                             return (
                               <div key={index} className="flex flex-col space-y-1">
-                                <span className={`font-extrabold flex items-center gap-1 ${
-                                  isUser ? "text-indigo-500" : "text-amber-500"
-                                }`}>
+                                <span className={`font-extrabold flex items-center gap-1 ${isUser ? "text-indigo-500" : "text-amber-500"
+                                  }`}>
                                   {isUser ? "👤 User" : "🤖 VisionGPT"}
                                 </span>
-                                <div className={`p-3.5 rounded-2xl border leading-relaxed text-slate-750 dark:text-zinc-350 ${
-                                  isUser
-                                    ? "bg-indigo-500/5 border-indigo-500/10 dark:border-indigo-500/15"
-                                    : msg.error
-                                      ? "bg-red-500/5 border-red-500/20 text-red-650 dark:text-red-400"
-                                      : "bg-white dark:bg-zinc-900 border-slate-200/60 dark:border-zinc-800"
-                                }`}>
+                                <div className={`p-3.5 rounded-2xl border leading-relaxed text-slate-750 dark:text-zinc-350 ${isUser
+                                  ? "bg-indigo-500/5 border-indigo-500/10 dark:border-indigo-500/15"
+                                  : msg.error
+                                    ? "bg-red-500/5 border-red-500/20 text-red-650 dark:text-red-400"
+                                    : "bg-white dark:bg-zinc-900 border-slate-200/60 dark:border-zinc-800"
+                                  }`}>
                                   <div className="whitespace-pre-wrap">{msg.content}</div>
 
                                   {/* Referenced sources timeline citation links */}
@@ -1541,575 +1652,575 @@ export default function WorkspacePage() {
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
 
-        {/* Left Column: Drag & Drop upload + File formats */}
-        <div className="lg:col-span-2 space-y-8">
+          {/* Left Column: Drag & Drop upload + File formats */}
+          <div className="lg:col-span-2 space-y-8">
 
-          {/* 1. Large drag & drop upload area */}
-          <motion.div
-            initial={{ opacity: 0, scale: 0.98 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 0.5, delay: 0.1 }}
-            onDragEnter={handleDrag}
-            onDragOver={handleDrag}
-            onDragLeave={handleDrag}
-            onDrop={handleDrop}
-            onClick={() => !isUploading && fileInputRef.current?.click()}
-            className={`relative rounded-3xl border-2 border-dashed p-10 md:p-12 transition-all duration-300 flex flex-col items-center justify-center text-center group ${isUploading ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:border-slate-300 dark:hover:border-zinc-700 hover:bg-slate-50/50 dark:hover:bg-zinc-900/30"
-              } ${isDragActive && !isUploading
-                ? "border-violet-500 bg-violet-500/5 ring-4 ring-violet-500/5 scale-[1.01]"
-                : "border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20"
-              }`}
-          >
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleFileChange}
-              multiple
-              accept="image/*,application/pdf,audio/*,video/*"
-              className="hidden"
-              disabled={isUploading}
-            />
-            <div className="space-y-6 flex flex-col items-center">
-              {/* Icon wrapper */}
-              <div className={`h-16 w-16 rounded-2xl bg-slate-50 dark:bg-zinc-900 border border-slate-100 dark:border-zinc-800 flex items-center justify-center shadow-sm transition-all duration-300 group-hover:scale-110 group-hover:border-violet-500/30 ${isDragActive && !isUploading ? "border-violet-500/30 text-violet-500 bg-violet-50/20" : "text-slate-400"
-                }`}>
-                <UploadCloud className={`h-8 w-8 transition-transform duration-300 ${isDragActive && !isUploading ? "scale-110 text-violet-500" : "group-hover:-translate-y-1"
-                  }`} />
-              </div>
-
-              <div className="space-y-2">
-                <h3 className="font-bold text-sm tracking-tight">Drag & Drop your files here</h3>
-                <p className="text-xs text-slate-400 dark:text-zinc-500 max-w-sm">
-                  Supported formats: Images, PDFs, Audio, Videos. Maximum file size per batch is 50MB.
-                </p>
-              </div>
-
-              {/* Upload Button */}
-              <button
-                onClick={handleButtonClick}
-                disabled={isUploading}
-                className={`relative inline-flex items-center gap-2 px-5 py-2 rounded-xl text-xs font-semibold text-white bg-gradient-to-tr from-violet-650 to-indigo-500 shadow-md shadow-violet-650/20 hover:shadow-lg hover:shadow-violet-650/25 transition-all transform active:scale-95 ${isUploading ? "opacity-50 cursor-not-allowed active:scale-100" : "cursor-pointer"
-                  }`}
-              >
-                <span>{isUploading ? "Uploading..." : "Select Files"}</span>
-                <ArrowRight className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          </motion.div>
-
-          {/* Selected Files Display Area */}
-          {selectedFiles.length > 0 && (
+            {/* 1. Large drag & drop upload area */}
             <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="space-y-3 p-6 rounded-3xl border border-slate-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-900/10 shadow-sm"
+              initial={{ opacity: 0, scale: 0.98 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.5, delay: 0.1 }}
+              onDragEnter={handleDrag}
+              onDragOver={handleDrag}
+              onDragLeave={handleDrag}
+              onDrop={handleDrop}
+              onClick={() => !isUploading && fileInputRef.current?.click()}
+              className={`relative rounded-3xl border-2 border-dashed p-10 md:p-12 transition-all duration-300 flex flex-col items-center justify-center text-center group ${isUploading ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:border-slate-300 dark:hover:border-zinc-700 hover:bg-slate-50/50 dark:hover:bg-zinc-900/30"
+                } ${isDragActive && !isUploading
+                  ? "border-violet-500 bg-violet-500/5 ring-4 ring-violet-500/5 scale-[1.01]"
+                  : "border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20"
+                }`}
             >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold tracking-tight">Selected Files ({selectedFiles.length})</span>
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleFileChange}
+                multiple
+                accept="image/*,application/pdf,audio/*,video/*"
+                className="hidden"
+                disabled={isUploading}
+              />
+              <div className="space-y-6 flex flex-col items-center">
+                {/* Icon wrapper */}
+                <div className={`h-16 w-16 rounded-2xl bg-slate-50 dark:bg-zinc-900 border border-slate-100 dark:border-zinc-800 flex items-center justify-center shadow-sm transition-all duration-300 group-hover:scale-110 group-hover:border-violet-500/30 ${isDragActive && !isUploading ? "border-violet-500/30 text-violet-500 bg-violet-50/20" : "text-slate-400"
+                  }`}>
+                  <UploadCloud className={`h-8 w-8 transition-transform duration-300 ${isDragActive && !isUploading ? "scale-110 text-violet-500" : "group-hover:-translate-y-1"
+                    }`} />
+                </div>
+
+                <div className="space-y-2">
+                  <h3 className="font-bold text-sm tracking-tight">Drag & Drop your files here</h3>
+                  <p className="text-xs text-slate-400 dark:text-zinc-500 max-w-sm">
+                    Supported formats: Images, PDFs, Audio, Videos. Maximum file size per batch is 50MB.
+                  </p>
+                </div>
+
+                {/* Upload Button */}
                 <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (!isUploading) setSelectedFiles([]);
-                  }}
+                  onClick={handleButtonClick}
                   disabled={isUploading}
-                  className={`text-[10px] font-medium hover:underline transition-colors ${isUploading ? "text-slate-400 cursor-not-allowed" : "text-red-500 hover:text-red-650"
+                  className={`relative inline-flex items-center gap-2 px-5 py-2 rounded-xl text-xs font-semibold text-white bg-gradient-to-tr from-violet-650 to-indigo-500 shadow-md shadow-violet-650/20 hover:shadow-lg hover:shadow-violet-650/25 transition-all transform active:scale-95 ${isUploading ? "opacity-50 cursor-not-allowed active:scale-100" : "cursor-pointer"
                     }`}
                 >
-                  Clear All
+                  <span>{isUploading ? "Uploading..." : "Select Files"}</span>
+                  <ArrowRight className="h-3.5 w-3.5" />
                 </button>
               </div>
+            </motion.div>
 
-              <div className="space-y-2.5 max-h-60 overflow-y-auto pr-1">
-                {selectedFiles.map((file, idx) => {
-                  const Icon = getFileIcon(file.type);
-                  return (
-                    <div
-                      key={`${file.name}-${idx}`}
-                      className="flex items-center justify-between p-3.5 rounded-2xl border border-slate-100 dark:border-zinc-855 bg-slate-50/50 dark:bg-zinc-950/40 text-xs shadow-sm hover:border-slate-200 dark:hover:border-zinc-800 transition-all"
-                    >
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className="h-8.5 w-8.5 rounded-xl bg-violet-500/10 dark:bg-violet-400/10 flex items-center justify-center shrink-0">
-                          <Icon className="h-4.5 w-4.5 text-violet-600 dark:text-violet-400" />
+            {/* Selected Files Display Area */}
+            {selectedFiles.length > 0 && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="space-y-3 p-6 rounded-3xl border border-slate-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-900/10 shadow-sm"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold tracking-tight">Selected Files ({selectedFiles.length})</span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (!isUploading) setSelectedFiles([]);
+                    }}
+                    disabled={isUploading}
+                    className={`text-[10px] font-medium hover:underline transition-colors ${isUploading ? "text-slate-400 cursor-not-allowed" : "text-red-500 hover:text-red-650"
+                      }`}
+                  >
+                    Clear All
+                  </button>
+                </div>
+
+                <div className="space-y-2.5 max-h-60 overflow-y-auto pr-1">
+                  {selectedFiles.map((file, idx) => {
+                    const Icon = getFileIcon(file.type);
+                    return (
+                      <div
+                        key={`${file.name}-${idx}`}
+                        className="flex items-center justify-between p-3.5 rounded-2xl border border-slate-100 dark:border-zinc-855 bg-slate-50/50 dark:bg-zinc-950/40 text-xs shadow-sm hover:border-slate-200 dark:hover:border-zinc-800 transition-all"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="h-8.5 w-8.5 rounded-xl bg-violet-500/10 dark:bg-violet-400/10 flex items-center justify-center shrink-0">
+                            <Icon className="h-4.5 w-4.5 text-violet-600 dark:text-violet-400" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="font-semibold text-slate-700 dark:text-zinc-200 truncate max-w-[150px] sm:max-w-xs md:max-w-sm">{file.name}</p>
+                            <p className="text-[9px] text-slate-400 dark:text-zinc-500 uppercase">
+                              {file.type || 'unknown type'} {file.pageCount !== undefined ? `• ${file.pageCount} page(s)` : ''}
+                            </p>
+                          </div>
                         </div>
-                        <div className="min-w-0">
-                          <p className="font-semibold text-slate-700 dark:text-zinc-200 truncate max-w-[150px] sm:max-w-xs md:max-w-sm">{file.name}</p>
-                          <p className="text-[9px] text-slate-400 dark:text-zinc-500 uppercase">
-                            {file.type || 'unknown type'} {file.pageCount !== undefined ? `• ${file.pageCount} page(s)` : ''}
+                        <div className="flex items-center gap-3 shrink-0">
+                          {file.status === "uploading" && (
+                            <div className="flex items-center gap-2">
+                              <div className="w-16 h-1.5 bg-slate-200 dark:bg-zinc-855 rounded-full overflow-hidden">
+                                <div
+                                  className="h-full bg-violet-500 transition-all duration-300"
+                                  style={{ width: `${file.progress}%` }}
+                                />
+                              </div>
+                              <span className="text-[10px] text-slate-400 dark:text-zinc-500 font-semibold">{file.progress}%</span>
+                            </div>
+                          )}
+                          {file.status === "success" && (
+                            <div className="flex items-center gap-2">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                                Uploaded
+                              </span>
+                              {file.type.startsWith("image/") && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleAnalyzeClick(file);
+                                  }}
+                                  disabled={analysisLoading}
+                                  className={`px-2.5 py-0.5 rounded-md text-[9px] font-bold shadow-sm transition-all transform active:scale-95 cursor-pointer disabled:cursor-not-allowed ${activeFileId === file.id
+                                    ? "bg-violet-650 text-white"
+                                    : "bg-slate-200/80 hover:bg-slate-350/80 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300"
+                                    }`}
+                                >
+                                  {activeFileId === file.id ? "Active Chat" : "Analyze"}
+                                </button>
+                              )}
+                              {(file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setActiveFileId(file.id);
+                                  }}
+                                  className={`px-2.5 py-0.5 rounded-md text-[9px] font-bold shadow-sm transition-all transform active:scale-95 cursor-pointer ${activeFileId === file.id
+                                    ? "bg-red-650 text-white"
+                                    : "bg-slate-200/80 hover:bg-slate-300/85 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300"
+                                    }`}
+                                >
+                                  {activeFileId === file.id ? "Viewing Info" : "Preview"}
+                                </button>
+                              )}
+                              {isAudioFile(file) && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setActiveFileId(file.id);
+                                  }}
+                                  className={`px-2.5 py-0.5 rounded-md text-[9px] font-bold shadow-sm transition-all transform active:scale-95 cursor-pointer ${activeFileId === file.id
+                                    ? "bg-emerald-600 text-white"
+                                    : "bg-slate-200/80 hover:bg-slate-350/80 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300"
+                                    }`}
+                                >
+                                  {activeFileId === file.id ? "Viewing Audio" : "Preview"}
+                                </button>
+                              )}
+                              {isVideoFile(file) && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setActiveFileId(file.id);
+                                  }}
+                                  className={`px-2.5 py-0.5 rounded-md text-[9px] font-bold shadow-sm transition-all transform active:scale-95 cursor-pointer ${activeFileId === file.id
+                                    ? "bg-amber-600 text-white"
+                                    : "bg-slate-200/80 hover:bg-slate-350/80 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300"
+                                    }`}
+                                >
+                                  {activeFileId === file.id ? "Viewing Video" : "Preview"}
+                                </button>
+                              )}
+                            </div>
+                          )}
+                          {file.status === "error" && (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-semibold bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20">
+                              Failed
+                            </span>
+                          )}
+                          <p className="font-medium text-slate-500 dark:text-zinc-400 text-[11px] min-w-[50px] text-right">
+                            {formatBytes(file.size)}
                           </p>
                         </div>
                       </div>
-                      <div className="flex items-center gap-3 shrink-0">
-                        {file.status === "uploading" && (
-                          <div className="flex items-center gap-2">
-                            <div className="w-16 h-1.5 bg-slate-200 dark:bg-zinc-855 rounded-full overflow-hidden">
-                              <div
-                                className="h-full bg-violet-500 transition-all duration-300"
-                                style={{ width: `${file.progress}%` }}
-                              />
-                            </div>
-                            <span className="text-[10px] text-slate-400 dark:text-zinc-500 font-semibold">{file.progress}%</span>
-                          </div>
-                        )}
-                        {file.status === "success" && (
-                          <div className="flex items-center gap-2">
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                              Uploaded
-                            </span>
-                            {file.type.startsWith("image/") && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleAnalyzeClick(file);
-                                }}
-                                disabled={analysisLoading}
-                                className={`px-2.5 py-0.5 rounded-md text-[9px] font-bold shadow-sm transition-all transform active:scale-95 cursor-pointer disabled:cursor-not-allowed ${activeFileId === file.id
-                                  ? "bg-violet-650 text-white"
-                                  : "bg-slate-200/80 hover:bg-slate-350/80 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300"
-                                  }`}
-                              >
-                                {activeFileId === file.id ? "Active Chat" : "Analyze"}
-                              </button>
-                            )}
-                            {(file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setActiveFileId(file.id);
-                                }}
-                                className={`px-2.5 py-0.5 rounded-md text-[9px] font-bold shadow-sm transition-all transform active:scale-95 cursor-pointer ${activeFileId === file.id
-                                  ? "bg-red-650 text-white"
-                                  : "bg-slate-200/80 hover:bg-slate-300/85 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300"
-                                  }`}
-                              >
-                                {activeFileId === file.id ? "Viewing Info" : "Preview"}
-                              </button>
-                            )}
-                            {isAudioFile(file) && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setActiveFileId(file.id);
-                                }}
-                                className={`px-2.5 py-0.5 rounded-md text-[9px] font-bold shadow-sm transition-all transform active:scale-95 cursor-pointer ${activeFileId === file.id
-                                  ? "bg-emerald-600 text-white"
-                                  : "bg-slate-200/80 hover:bg-slate-350/80 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300"
-                                  }`}
-                              >
-                                {activeFileId === file.id ? "Viewing Audio" : "Preview"}
-                              </button>
-                            )}
-                            {isVideoFile(file) && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setActiveFileId(file.id);
-                                }}
-                                className={`px-2.5 py-0.5 rounded-md text-[9px] font-bold shadow-sm transition-all transform active:scale-95 cursor-pointer ${activeFileId === file.id
-                                  ? "bg-amber-600 text-white"
-                                  : "bg-slate-200/80 hover:bg-slate-350/80 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300"
-                                  }`}
-                              >
-                                {activeFileId === file.id ? "Viewing Video" : "Preview"}
-                              </button>
-                            )}
-                          </div>
-                        )}
-                        {file.status === "error" && (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-semibold bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20">
-                            Failed
-                          </span>
-                        )}
-                        <p className="font-medium text-slate-500 dark:text-zinc-400 text-[11px] min-w-[50px] text-right">
-                          {formatBytes(file.size)}
-                        </p>
+                    );
+                  })}
+                </div>
+              </motion.div>
+            )}
+
+            {/* 2. Supported File Types section */}
+            <motion.div
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.4, delay: 0.2 }}
+              className="space-y-4"
+            >
+              <div className="flex items-center gap-2">
+                <Info className="h-4.5 w-4.5 text-violet-500" />
+                <h2 className="text-sm font-bold tracking-tight">Supported File Formats</h2>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                {fileTypes.map((type) => {
+                  const Icon = type.icon;
+                  return (
+                    <div
+                      key={type.title}
+                      className="p-4 rounded-2xl border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/10 flex flex-col justify-between space-y-3 shadow-sm hover:shadow-md transition-shadow"
+                    >
+                      <div className={`h-9 w-9 rounded-lg flex items-center justify-center border ${type.color}`}>
+                        <Icon className="h-4.5 w-4.5" />
+                      </div>
+                      <div className="space-y-0.5">
+                        <h4 className="text-xs font-bold">{type.title}</h4>
+                        <p className="text-[10px] text-slate-400 dark:text-zinc-500 leading-tight">{type.description}</p>
                       </div>
                     </div>
                   );
                 })}
               </div>
             </motion.div>
-          )}
 
-          {/* 2. Supported File Types section */}
-          <motion.div
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4, delay: 0.2 }}
-            className="space-y-4"
-          >
-            <div className="flex items-center gap-2">
-              <Info className="h-4.5 w-4.5 text-violet-500" />
-              <h2 className="text-sm font-bold tracking-tight">Supported File Formats</h2>
-            </div>
+          </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              {fileTypes.map((type) => {
-                const Icon = type.icon;
-                return (
-                  <div
-                    key={type.title}
-                    className="p-4 rounded-2xl border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/10 flex flex-col justify-between space-y-3 shadow-sm hover:shadow-md transition-shadow"
-                  >
-                    <div className={`h-9 w-9 rounded-lg flex items-center justify-center border ${type.color}`}>
-                      <Icon className="h-4.5 w-4.5" />
-                    </div>
-                    <div className="space-y-0.5">
-                      <h4 className="text-xs font-bold">{type.title}</h4>
-                      <p className="text-[10px] text-slate-400 dark:text-zinc-500 leading-tight">{type.description}</p>
-                    </div>
+          {/* Right Column: Recent Uploads & Conversational Chat / PDF Preview Panel */}
+          <div className="space-y-8">
+
+            {/* PDF Preview Card Display */}
+            {activeFileId && selectedFiles.find((f) => f.id === activeFileId)?.type === "application/pdf" && (
+              <motion.div
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 rounded-3xl p-6 shadow-sm space-y-6 flex flex-col"
+              >
+                {/* Header */}
+                <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-zinc-800/50">
+                  <div className="min-w-0">
+                    <h2 className="text-xs font-bold tracking-tight uppercase text-slate-500 dark:text-zinc-400">PDF Document</h2>
+                    <p className="text-[10px] text-slate-400 dark:text-zinc-500 truncate max-w-[180px]">
+                      {selectedFiles.find((f) => f.id === activeFileId)?.name}
+                    </p>
                   </div>
-                );
-              })}
-            </div>
-          </motion.div>
-
-        </div>
-
-        {/* Right Column: Recent Uploads & Conversational Chat / PDF Preview Panel */}
-        <div className="space-y-8">
-
-          {/* PDF Preview Card Display */}
-          {activeFileId && selectedFiles.find((f) => f.id === activeFileId)?.type === "application/pdf" && (
-            <motion.div
-              initial={{ opacity: 0, y: 15 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 rounded-3xl p-6 shadow-sm space-y-6 flex flex-col"
-            >
-              {/* Header */}
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-zinc-800/50">
-                <div className="min-w-0">
-                  <h2 className="text-xs font-bold tracking-tight uppercase text-slate-500 dark:text-zinc-400">PDF Document</h2>
-                  <p className="text-[10px] text-slate-400 dark:text-zinc-500 truncate max-w-[180px]">
-                    {selectedFiles.find((f) => f.id === activeFileId)?.name}
-                  </p>
+                  <button
+                    onClick={() => setActiveFileId(null)}
+                    className="text-slate-400 hover:text-slate-650 dark:hover:text-zinc-200 cursor-pointer"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
                 </div>
-                <button
-                  onClick={() => setActiveFileId(null)}
-                  className="text-slate-400 hover:text-slate-650 dark:hover:text-zinc-200 cursor-pointer"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
 
-              {/* PDF Preview details block / Scrollable Text / Chunk Viewer */}
-              {chunkResults[activeFileId] ? (
-                <div className="flex-1 flex flex-col min-h-0 space-y-4 animate-fade-in">
+                {/* PDF Preview details block / Scrollable Text / Chunk Viewer */}
+                {chunkResults[activeFileId] ? (
+                  <div className="flex-1 flex flex-col min-h-0 space-y-4 animate-fade-in">
 
-                  {/* Index Status Panel */}
-                  {indexResults[activeFileId] ? (
-                    <div className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-[10px] space-y-2.5">
-                      <div className="flex items-center justify-between font-bold text-emerald-600 dark:text-emerald-400">
-                        <span>Status: Knowledge Base Ready</span>
-                        <span className="inline-flex h-2 w-2 rounded-full bg-emerald-500 animate-ping"></span>
+                    {/* Index Status Panel */}
+                    {indexResults[activeFileId] ? (
+                      <div className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-[10px] space-y-2.5">
+                        <div className="flex items-center justify-between font-bold text-emerald-600 dark:text-emerald-400">
+                          <span>Status: Knowledge Base Ready</span>
+                          <span className="inline-flex h-2 w-2 rounded-full bg-emerald-500 animate-ping"></span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 text-slate-500 dark:text-zinc-450">
+                          <div>Model: <span className="font-semibold text-slate-700 dark:text-zinc-300">{indexResults[activeFileId].embedding_model}</span></div>
+                          <div>Vectors: <span className="font-semibold text-slate-700 dark:text-zinc-300">{indexResults[activeFileId].total_vectors}</span></div>
+                          <div>Dimension: <span className="font-semibold text-slate-700 dark:text-zinc-300">{indexResults[activeFileId].vector_dimension}</span></div>
+                          <div>Index: <span className="font-semibold text-slate-700 dark:text-zinc-300">FAISS IndexFlatL2</span></div>
+                        </div>
                       </div>
-                      <div className="grid grid-cols-2 gap-2 text-slate-500 dark:text-zinc-450">
-                        <div>Model: <span className="font-semibold text-slate-700 dark:text-zinc-300">{indexResults[activeFileId].embedding_model}</span></div>
-                        <div>Vectors: <span className="font-semibold text-slate-700 dark:text-zinc-300">{indexResults[activeFileId].total_vectors}</span></div>
-                        <div>Dimension: <span className="font-semibold text-slate-700 dark:text-zinc-300">{indexResults[activeFileId].vector_dimension}</span></div>
-                        <div>Index: <span className="font-semibold text-slate-700 dark:text-zinc-300">FAISS IndexFlatL2</span></div>
+                    ) : (
+                      /* Chunk Metrics Grid */
+                      <div className="grid grid-cols-2 gap-2 text-center">
+                        <div className="p-2 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-100 dark:border-zinc-850">
+                          <p className="text-[9px] text-slate-400 dark:text-zinc-500 font-medium">Total Chunks</p>
+                          <p className="text-xs font-bold text-slate-700 dark:text-zinc-250">{chunkResults[activeFileId].total_chunks}</p>
+                        </div>
+                        <div className="p-2 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-100 dark:border-zinc-850">
+                          <p className="text-[9px] text-slate-400 dark:text-zinc-500 font-medium">Avg Size (Chars)</p>
+                          <p className="text-xs font-bold text-slate-700 dark:text-zinc-250">{chunkResults[activeFileId].average_chunk_size}</p>
+                        </div>
                       </div>
-                    </div>
-                  ) : (
-                    /* Chunk Metrics Grid */
-                    <div className="grid grid-cols-2 gap-2 text-center">
-                      <div className="p-2 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-100 dark:border-zinc-850">
-                        <p className="text-[9px] text-slate-400 dark:text-zinc-500 font-medium">Total Chunks</p>
-                        <p className="text-xs font-bold text-slate-700 dark:text-zinc-250">{chunkResults[activeFileId].total_chunks}</p>
-                      </div>
-                      <div className="p-2 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-100 dark:border-zinc-850">
-                        <p className="text-[9px] text-slate-400 dark:text-zinc-500 font-medium">Avg Size (Chars)</p>
-                        <p className="text-xs font-bold text-slate-700 dark:text-zinc-250">{chunkResults[activeFileId].average_chunk_size}</p>
-                      </div>
-                    </div>
-                  )}
+                    )}
 
-                  {/* Tabs Switcher for Chunk Explorer vs RAG Chat */}
-                  {indexResults[activeFileId] && (
-                    <div className="flex border-b border-slate-100 dark:border-zinc-800">
-                      <button
-                        onClick={() => setActivePdfTab("chat")}
-                        className={`flex-1 pb-2 text-xs font-bold text-center border-b-2 transition-colors cursor-pointer ${activePdfTab === "chat"
-                          ? "border-red-500 text-slate-800 dark:text-zinc-150"
-                          : "border-transparent text-slate-400 dark:text-zinc-500"
-                          }`}
-                      >
-                        Ask Document
-                      </button>
-                      <button
-                        onClick={() => setActivePdfTab("chunks")}
-                        className={`flex-1 pb-2 text-xs font-bold text-center border-b-2 transition-colors cursor-pointer ${activePdfTab === "chunks"
-                          ? "border-red-500 text-slate-800 dark:text-zinc-150"
-                          : "border-transparent text-slate-400 dark:text-zinc-500"
-                          }`}
-                      >
-                        Browse Chunks
-                      </button>
-                    </div>
-                  )}
+                    {/* Tabs Switcher for Chunk Explorer vs RAG Chat */}
+                    {indexResults[activeFileId] && (
+                      <div className="flex border-b border-slate-100 dark:border-zinc-800">
+                        <button
+                          onClick={() => setActivePdfTab("chat")}
+                          className={`flex-1 pb-2 text-xs font-bold text-center border-b-2 transition-colors cursor-pointer ${activePdfTab === "chat"
+                            ? "border-red-500 text-slate-800 dark:text-zinc-150"
+                            : "border-transparent text-slate-400 dark:text-zinc-500"
+                            }`}
+                        >
+                          Ask Document
+                        </button>
+                        <button
+                          onClick={() => setActivePdfTab("chunks")}
+                          className={`flex-1 pb-2 text-xs font-bold text-center border-b-2 transition-colors cursor-pointer ${activePdfTab === "chunks"
+                            ? "border-red-500 text-slate-800 dark:text-zinc-150"
+                            : "border-transparent text-slate-400 dark:text-zinc-500"
+                            }`}
+                        >
+                          Browse Chunks
+                        </button>
+                      </div>
+                    )}
 
-                  {/* Tab View Contents */}
-                  {(!indexResults[activeFileId] || activePdfTab === "chunks") ? (
-                    /* Scrollable Chunks List */
-                    <div className="flex-1 min-h-[160px] max-h-[220px] overflow-y-auto space-y-2 pr-1 font-sans text-xs">
-                      {chunkResults[activeFileId].chunks.map((chunk) => {
-                        const isExpanded = !!expandedChunks[chunk.chunk_id];
-                        return (
-                          <div
-                            key={chunk.chunk_id}
-                            onClick={() => toggleChunk(chunk.chunk_id)}
-                            className="p-3 rounded-2xl border border-slate-100 dark:border-zinc-855 bg-slate-50/50 dark:bg-zinc-950/40 cursor-pointer hover:border-slate-200 dark:hover:border-zinc-800 transition-all space-y-2"
-                          >
-                            <div className="flex items-center justify-between font-semibold text-[9px] text-slate-500 dark:text-zinc-405">
-                              <span className="uppercase tracking-wider font-bold text-violet-600 dark:text-violet-400">{chunk.chunk_id}</span>
-                              <span>Page(s): {chunk.page} • {chunk.text.length} chars</span>
-                            </div>
-                            <p className={`text-[11px] leading-relaxed text-slate-600 dark:text-zinc-350 ${isExpanded ? "whitespace-pre-wrap font-mono text-[10px] bg-slate-100/50 dark:bg-zinc-955/50 p-2 rounded-xl border border-slate-200/30 dark:border-zinc-900/30" : "truncate"
-                              }`}>
-                              {isExpanded ? chunk.text : `${chunk.text.slice(0, 150)}${chunk.text.length > 150 ? '...' : ''}`}
-                            </p>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    /* RAG Chat interface view */
-                    <div className="flex flex-col flex-1 min-h-0 space-y-3">
-                      {/* Chat Messages scroll area */}
-                      <div
-                        ref={pdfChatScrollRef}
-                        className="flex-1 overflow-y-auto space-y-3.5 pr-1 text-xs scroll-smooth max-h-[180px] min-h-[140px]"
-                      >
-                        {(pdfChatHistories[activeFileId] || []).map((msg, idx) => {
-                          const isUser = msg.role === "user";
+                    {/* Tab View Contents */}
+                    {(!indexResults[activeFileId] || activePdfTab === "chunks") ? (
+                      /* Scrollable Chunks List */
+                      <div className="flex-1 min-h-[160px] max-h-[220px] overflow-y-auto space-y-2 pr-1 font-sans text-xs">
+                        {chunkResults[activeFileId].chunks.map((chunk) => {
+                          const isExpanded = !!expandedChunks[chunk.chunk_id];
                           return (
                             <div
-                              key={idx}
-                              className={`flex flex-col ${isUser ? "items-end" : "items-start"}`}
+                              key={chunk.chunk_id}
+                              onClick={() => toggleChunk(chunk.chunk_id)}
+                              className="p-3 rounded-2xl border border-slate-100 dark:border-zinc-855 bg-slate-50/50 dark:bg-zinc-950/40 cursor-pointer hover:border-slate-200 dark:hover:border-zinc-800 transition-all space-y-2"
                             >
-                              <div
-                                className={`max-w-[85%] rounded-2xl px-3 py-2 shadow-sm leading-relaxed whitespace-pre-wrap break-words ${isUser
-                                  ? "bg-red-650 text-white rounded-tr-none"
-                                  : "bg-slate-100 dark:bg-zinc-850 text-slate-800 dark:text-zinc-250 rounded-tl-none border border-slate-200/20 dark:border-zinc-800/30"
-                                  }`}
-                              >
-                                {msg.content}
+                              <div className="flex items-center justify-between font-semibold text-[9px] text-slate-500 dark:text-zinc-405">
+                                <span className="uppercase tracking-wider font-bold text-violet-600 dark:text-violet-400">{chunk.chunk_id}</span>
+                                <span>Page(s): {chunk.page} • {chunk.text.length} chars</span>
                               </div>
-
-                              {/* Sources list details */}
-                              {!isUser && msg.sources && msg.sources.length > 0 && (
-                                <div className="mt-1 flex flex-wrap gap-1 px-1">
-                                  <span className="text-[8px] text-slate-400 dark:text-zinc-500 font-semibold self-center">Sources:</span>
-                                  {msg.sources.map((s, sIdx) => (
-                                    <span
-                                      key={sIdx}
-                                      className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[8px] font-semibold bg-slate-200/60 dark:bg-zinc-800/80 text-slate-500 dark:text-zinc-400 border border-slate-300/10"
-                                    >
-                                      {s.chunk_id} (p. {s.page})
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
+                              <p className={`text-[11px] leading-relaxed text-slate-600 dark:text-zinc-350 ${isExpanded ? "whitespace-pre-wrap font-mono text-[10px] bg-slate-100/50 dark:bg-zinc-955/50 p-2 rounded-xl border border-slate-200/30 dark:border-zinc-900/30" : "truncate"
+                                }`}>
+                                {isExpanded ? chunk.text : `${chunk.text.slice(0, 150)}${chunk.text.length > 150 ? '...' : ''}`}
+                              </p>
                             </div>
                           );
                         })}
+                      </div>
+                    ) : (
+                      /* RAG Chat interface view */
+                      <div className="flex flex-col flex-1 min-h-0 space-y-3">
+                        {/* Chat Messages scroll area */}
+                        <div
+                          ref={pdfChatScrollRef}
+                          className="flex-1 overflow-y-auto space-y-3.5 pr-1 text-xs scroll-smooth max-h-[180px] min-h-[140px]"
+                        >
+                          {(pdfChatHistories[activeFileId] || []).map((msg, idx) => {
+                            const isUser = msg.role === "user";
+                            return (
+                              <div
+                                key={idx}
+                                className={`flex flex-col ${isUser ? "items-end" : "items-start"}`}
+                              >
+                                <div
+                                  className={`max-w-[85%] rounded-2xl px-3 py-2 shadow-sm leading-relaxed whitespace-pre-wrap break-words ${isUser
+                                    ? "bg-red-650 text-white rounded-tr-none"
+                                    : "bg-slate-100 dark:bg-zinc-850 text-slate-800 dark:text-zinc-250 rounded-tl-none border border-slate-200/20 dark:border-zinc-800/30"
+                                    }`}
+                                >
+                                  {msg.content}
+                                </div>
 
-                        {/* Typing Animation */}
-                        {pdfChatLoading && (
-                          <div className="flex justify-start">
-                            <div className="bg-slate-100 dark:bg-zinc-855 text-slate-500 dark:text-zinc-455 rounded-2xl rounded-tl-none px-3 py-1.5 border border-slate-200/20 dark:border-zinc-800/30 shadow-sm flex items-center gap-2">
-                              <div className="flex gap-1">
-                                <span className="w-1.5 h-1.5 bg-slate-400 dark:bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: "0ms" }}></span>
-                                <span className="w-1.5 h-1.5 bg-slate-400 dark:bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: "150ms" }}></span>
-                                <span className="w-1.5 h-1.5 bg-slate-400 dark:bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: "300ms" }}></span>
+                                {/* Sources list details */}
+                                {!isUser && msg.sources && msg.sources.length > 0 && (
+                                  <div className="mt-1 flex flex-wrap gap-1 px-1">
+                                    <span className="text-[8px] text-slate-400 dark:text-zinc-500 font-semibold self-center">Sources:</span>
+                                    {msg.sources.map((s, sIdx) => (
+                                      <span
+                                        key={sIdx}
+                                        className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[8px] font-semibold bg-slate-200/60 dark:bg-zinc-800/80 text-slate-500 dark:text-zinc-400 border border-slate-300/10"
+                                      >
+                                        {s.chunk_id} (p. {s.page})
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
                               </div>
-                              <span className="text-[9px] font-semibold italic">VisionGPT is typing...</span>
+                            );
+                          })}
+
+                          {/* Typing Animation */}
+                          {pdfChatLoading && (
+                            <div className="flex justify-start">
+                              <div className="bg-slate-100 dark:bg-zinc-855 text-slate-500 dark:text-zinc-455 rounded-2xl rounded-tl-none px-3 py-1.5 border border-slate-200/20 dark:border-zinc-800/30 shadow-sm flex items-center gap-2">
+                                <div className="flex gap-1">
+                                  <span className="w-1.5 h-1.5 bg-slate-400 dark:bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: "0ms" }}></span>
+                                  <span className="w-1.5 h-1.5 bg-slate-400 dark:bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: "150ms" }}></span>
+                                  <span className="w-1.5 h-1.5 bg-slate-400 dark:bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: "300ms" }}></span>
+                                </div>
+                                <span className="text-[9px] font-semibold italic">VisionGPT is typing...</span>
+                              </div>
                             </div>
-                          </div>
-                        )}
+                          )}
+                        </div>
+
+                        {/* Chat Input & Clear Chat wrapper */}
+                        <div className="pt-2 border-t border-slate-100 dark:border-zinc-855 flex gap-2 items-center">
+                          <button
+                            onClick={() => {
+                              setPdfChatHistories((prev) => ({
+                                ...prev,
+                                [activeFileId]: [
+                                  { role: "assistant", content: "Chat cleared. Ask me anything about the document!" }
+                                ]
+                              }));
+                            }}
+                            className="px-2.5 py-2 rounded-xl bg-slate-250 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 text-slate-600 dark:text-zinc-300 text-[10px] font-bold transition-all shrink-0 cursor-pointer border-0"
+                          >
+                            Clear
+                          </button>
+
+                          <input
+                            value={pdfChatInput}
+                            onChange={(e) => setPdfChatInput(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && !e.shiftKey) {
+                                e.preventDefault();
+                                handleSendPdfMessage();
+                              }
+                            }}
+                            placeholder="Ask anything about the PDF..."
+                            disabled={pdfChatLoading}
+                            className="flex-1 px-3 py-2 rounded-xl text-[11px] border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 focus:outline-none focus:ring-2 focus:ring-red-500/30 disabled:opacity-60 disabled:cursor-not-allowed h-9"
+                          />
+
+                          <button
+                            onClick={handleSendPdfMessage}
+                            disabled={pdfChatLoading || !pdfChatInput.trim()}
+                            className="px-3.5 py-2 rounded-xl bg-red-650 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-[11px] font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center h-9 cursor-pointer border-0"
+                          >
+                            Send
+                          </button>
+                        </div>
                       </div>
-
-                      {/* Chat Input & Clear Chat wrapper */}
-                      <div className="pt-2 border-t border-slate-100 dark:border-zinc-855 flex gap-2 items-center">
-                        <button
-                          onClick={() => {
-                            setPdfChatHistories((prev) => ({
-                              ...prev,
-                              [activeFileId]: [
-                                { role: "assistant", content: "Chat cleared. Ask me anything about the document!" }
-                              ]
-                            }));
-                          }}
-                          className="px-2.5 py-2 rounded-xl bg-slate-250 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 text-slate-600 dark:text-zinc-300 text-[10px] font-bold transition-all shrink-0 cursor-pointer border-0"
-                        >
-                          Clear
-                        </button>
-
-                        <input
-                          value={pdfChatInput}
-                          onChange={(e) => setPdfChatInput(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" && !e.shiftKey) {
-                              e.preventDefault();
-                              handleSendPdfMessage();
-                            }
-                          }}
-                          placeholder="Ask anything about the PDF..."
-                          disabled={pdfChatLoading}
-                          className="flex-1 px-3 py-2 rounded-xl text-[11px] border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 focus:outline-none focus:ring-2 focus:ring-red-500/30 disabled:opacity-60 disabled:cursor-not-allowed h-9"
-                        />
-
-                        <button
-                          onClick={handleSendPdfMessage}
-                          disabled={pdfChatLoading || !pdfChatInput.trim()}
-                          className="px-3.5 py-2 rounded-xl bg-red-650 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-[11px] font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center h-9 cursor-pointer border-0"
-                        >
-                          Send
-                        </button>
+                    )}
+                  </div>
+                ) : extractResults[activeFileId] ? (
+                  /* Text Extraction results block */
+                  <div className="flex-1 flex flex-col min-h-0 space-y-4">
+                    {/* Extraction Metrics Grid */}
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                      <div className="p-2 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-100 dark:border-zinc-850">
+                        <p className="text-[9px] text-slate-400 dark:text-zinc-500 font-medium">Pages</p>
+                        <p className="text-xs font-bold text-slate-700 dark:text-zinc-255">{extractResults[activeFileId].pageCount}</p>
+                      </div>
+                      <div className="p-2 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-100 dark:border-zinc-850">
+                        <p className="text-[9px] text-slate-400 dark:text-zinc-500 font-medium">Words</p>
+                        <p className="text-xs font-bold text-slate-700 dark:text-zinc-255">{extractResults[activeFileId].wordCount}</p>
+                      </div>
+                      <div className="p-2 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-100 dark:border-zinc-850">
+                        <p className="text-[9px] text-slate-400 dark:text-zinc-500 font-medium">Chars</p>
+                        <p className="text-xs font-bold text-slate-700 dark:text-zinc-255">{extractResults[activeFileId].characterCount}</p>
                       </div>
                     </div>
+
+                    {/* Scrollable Text Viewer */}
+                    <div className="flex-1 min-h-[220px] max-h-[300px] overflow-y-auto p-3 rounded-xl border border-slate-150 dark:border-zinc-855 bg-slate-50/50 dark:bg-zinc-950/40 font-mono text-[10px] text-slate-600 dark:text-zinc-350 leading-normal whitespace-pre-wrap break-words">
+                      {extractResults[activeFileId].extractedText}
+                    </div>
+                  </div>
+                ) : (
+                  /* Standard PDF Details Cover */
+                  <div className="flex-1 flex flex-col items-center justify-center p-6 border border-slate-100 dark:border-zinc-850 bg-slate-50/50 dark:bg-zinc-950/40 rounded-2xl text-center space-y-4">
+                    <div className="h-16 w-16 rounded-2xl bg-red-500/10 dark:bg-red-400/10 flex items-center justify-center border border-red-500/20">
+                      <FileText className="h-8 w-8 text-red-650 dark:text-red-400" />
+                    </div>
+
+                    <div className="space-y-1 w-full px-2">
+                      <h3 className="text-xs font-bold truncate max-w-full text-slate-800 dark:text-zinc-200">
+                        {selectedFiles.find((f) => f.id === activeFileId)?.name}
+                      </h3>
+                      <p className="text-[10px] text-slate-400 dark:text-zinc-500">
+                        Size: {formatBytes(selectedFiles.find((f) => f.id === activeFileId)?.size || 0)}
+                      </p>
+                      <p className="text-[10px] text-slate-400 dark:text-zinc-500 font-semibold">
+                        Pages: {selectedFiles.find((f) => f.id === activeFileId)?.pageCount || "Unknown"}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Action Buttons: Build Knowledge Base, Create Chunks, Extract Text, Open PDF */}
+                <div className="space-y-2.5">
+                  {chunkResults[activeFileId] && !indexResults[activeFileId] && (
+                    <button
+                      onClick={() => {
+                        const target = selectedFiles.find((f) => f.id === activeFileId);
+                        if (target?.savedName) {
+                          triggerIndexing(target.savedName);
+                        }
+                      }}
+                      disabled={indexLoading}
+                      className="w-full py-2.5 rounded-xl bg-violet-650 hover:bg-violet-755 disabled:opacity-50 text-white text-xs font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center gap-2 cursor-pointer border-0 disabled:cursor-not-allowed"
+                    >
+                      {indexLoading ? (
+                        <>
+                          <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                          <span>Building Knowledge Base...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="h-3.5 w-3.5" />
+                          <span>Build Knowledge Base</span>
+                        </>
+                      )}
+                    </button>
                   )}
-                </div>
-              ) : extractResults[activeFileId] ? (
-                /* Text Extraction results block */
-                <div className="flex-1 flex flex-col min-h-0 space-y-4">
-                  {/* Extraction Metrics Grid */}
-                  <div className="grid grid-cols-3 gap-2 text-center">
-                    <div className="p-2 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-100 dark:border-zinc-850">
-                      <p className="text-[9px] text-slate-400 dark:text-zinc-500 font-medium">Pages</p>
-                      <p className="text-xs font-bold text-slate-700 dark:text-zinc-255">{extractResults[activeFileId].pageCount}</p>
-                    </div>
-                    <div className="p-2 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-100 dark:border-zinc-850">
-                      <p className="text-[9px] text-slate-400 dark:text-zinc-500 font-medium">Words</p>
-                      <p className="text-xs font-bold text-slate-700 dark:text-zinc-255">{extractResults[activeFileId].wordCount}</p>
-                    </div>
-                    <div className="p-2 rounded-xl bg-slate-50 dark:bg-zinc-950/40 border border-slate-100 dark:border-zinc-850">
-                      <p className="text-[9px] text-slate-400 dark:text-zinc-500 font-medium">Chars</p>
-                      <p className="text-xs font-bold text-slate-700 dark:text-zinc-255">{extractResults[activeFileId].characterCount}</p>
-                    </div>
-                  </div>
 
-                  {/* Scrollable Text Viewer */}
-                  <div className="flex-1 min-h-[220px] max-h-[300px] overflow-y-auto p-3 rounded-xl border border-slate-150 dark:border-zinc-855 bg-slate-50/50 dark:bg-zinc-950/40 font-mono text-[10px] text-slate-600 dark:text-zinc-350 leading-normal whitespace-pre-wrap break-words">
-                    {extractResults[activeFileId].extractedText}
-                  </div>
-                </div>
-              ) : (
-                /* Standard PDF Details Cover */
-                <div className="flex-1 flex flex-col items-center justify-center p-6 border border-slate-100 dark:border-zinc-850 bg-slate-50/50 dark:bg-zinc-950/40 rounded-2xl text-center space-y-4">
-                  <div className="h-16 w-16 rounded-2xl bg-red-500/10 dark:bg-red-400/10 flex items-center justify-center border border-red-500/20">
-                    <FileText className="h-8 w-8 text-red-650 dark:text-red-400" />
-                  </div>
+                  {extractResults[activeFileId] && !chunkResults[activeFileId] && (
+                    <button
+                      onClick={() => {
+                        triggerTextChunking(extractResults[activeFileId].extractedText);
+                      }}
+                      disabled={chunkLoading}
+                      className="w-full py-2.5 rounded-xl bg-violet-650 hover:bg-violet-755 disabled:opacity-50 text-white text-xs font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center gap-2 cursor-pointer border-0 disabled:cursor-not-allowed"
+                    >
+                      {chunkLoading ? (
+                        <>
+                          <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                          <span>Creating Chunks...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="h-3.5 w-3.5" />
+                          <span>Create Chunks</span>
+                        </>
+                      )}
+                    </button>
+                  )}
 
-                  <div className="space-y-1 w-full px-2">
-                    <h3 className="text-xs font-bold truncate max-w-full text-slate-800 dark:text-zinc-200">
-                      {selectedFiles.find((f) => f.id === activeFileId)?.name}
-                    </h3>
-                    <p className="text-[10px] text-slate-400 dark:text-zinc-500">
-                      Size: {formatBytes(selectedFiles.find((f) => f.id === activeFileId)?.size || 0)}
-                    </p>
-                    <p className="text-[10px] text-slate-400 dark:text-zinc-500 font-semibold">
-                      Pages: {selectedFiles.find((f) => f.id === activeFileId)?.pageCount || "Unknown"}
-                    </p>
-                  </div>
-                </div>
-              )}
+                  {!extractResults[activeFileId] && (
+                    <button
+                      onClick={() => {
+                        const target = selectedFiles.find((f) => f.id === activeFileId);
+                        if (target?.savedName) {
+                          triggerTextExtraction(target.savedName);
+                        }
+                      }}
+                      disabled={extractLoading}
+                      className="w-full py-2.5 rounded-xl bg-violet-650 hover:bg-violet-755 disabled:opacity-50 text-white text-xs font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center gap-2 cursor-pointer border-0 disabled:cursor-not-allowed"
+                    >
+                      {extractLoading ? (
+                        <>
+                          <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                          <span>Extracting Text...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="h-3.5 w-3.5" />
+                          <span>Extract Text</span>
+                        </>
+                      )}
+                    </button>
+                  )}
 
-              {/* Action Buttons: Build Knowledge Base, Create Chunks, Extract Text, Open PDF */}
-              <div className="space-y-2.5">
-                {chunkResults[activeFileId] && !indexResults[activeFileId] && (
                   <button
                     onClick={() => {
                       const target = selectedFiles.find((f) => f.id === activeFileId);
                       if (target?.savedName) {
-                        triggerIndexing(target.savedName);
+                        const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+                        const backendRootUrl = apiBaseUrl.replace("/api/v1", "");
+                        window.open(`${backendRootUrl}/uploads/pdfs/${target.savedName}`, "_blank");
+                      } else {
+                        alert("Document is still processing or upload was not completed.");
                       }
                     }}
-                    disabled={indexLoading}
-                    className="w-full py-2.5 rounded-xl bg-violet-650 hover:bg-violet-755 disabled:opacity-50 text-white text-xs font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center gap-2 cursor-pointer border-0 disabled:cursor-not-allowed"
+                    className="w-full py-2.5 rounded-xl bg-red-655 hover:bg-red-700 text-white text-xs font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center gap-2 cursor-pointer border-0"
                   >
-                    {indexLoading ? (
-                      <>
-                        <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                        <span>Building Knowledge Base...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles className="h-3.5 w-3.5" />
-                        <span>Build Knowledge Base</span>
-                      </>
-                    )}
+                    <FolderOpen className="h-4 w-4" />
+                    <span>Open PDF</span>
                   </button>
-                )}
+                </div>
+              </motion.div>
+            )}
 
-                {extractResults[activeFileId] && !chunkResults[activeFileId] && (
-                  <button
-                    onClick={() => {
-                      triggerTextChunking(extractResults[activeFileId].extractedText);
-                    }}
-                    disabled={chunkLoading}
-                    className="w-full py-2.5 rounded-xl bg-violet-650 hover:bg-violet-755 disabled:opacity-50 text-white text-xs font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center gap-2 cursor-pointer border-0 disabled:cursor-not-allowed"
-                  >
-                    {chunkLoading ? (
-                      <>
-                        <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                        <span>Creating Chunks...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles className="h-3.5 w-3.5" />
-                        <span>Create Chunks</span>
-                      </>
-                    )}
-                  </button>
-                )}
-
-                {!extractResults[activeFileId] && (
-                  <button
-                    onClick={() => {
-                      const target = selectedFiles.find((f) => f.id === activeFileId);
-                      if (target?.savedName) {
-                        triggerTextExtraction(target.savedName);
-                      }
-                    }}
-                    disabled={extractLoading}
-                    className="w-full py-2.5 rounded-xl bg-violet-650 hover:bg-violet-755 disabled:opacity-50 text-white text-xs font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center gap-2 cursor-pointer border-0 disabled:cursor-not-allowed"
-                  >
-                    {extractLoading ? (
-                      <>
-                        <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                        <span>Extracting Text...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles className="h-3.5 w-3.5" />
-                        <span>Extract Text</span>
-                      </>
-                    )}
-                  </button>
-                )}
-
-                <button
-                  onClick={() => {
-                    const target = selectedFiles.find((f) => f.id === activeFileId);
-                    if (target?.savedName) {
-                      const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
-                      const backendRootUrl = apiBaseUrl.replace("/api/v1", "");
-                      window.open(`${backendRootUrl}/uploads/pdfs/${target.savedName}`, "_blank");
-                    } else {
-                      alert("Document is still processing or upload was not completed.");
-                    }
-                  }}
-                  className="w-full py-2.5 rounded-xl bg-red-655 hover:bg-red-700 text-white text-xs font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center gap-2 cursor-pointer border-0"
-                >
-                  <FolderOpen className="h-4 w-4" />
-                  <span>Open PDF</span>
-                </button>
-              </div>
-            </motion.div>
-          )}
-
-          {/* Audio Preview Card Display */}
-          {activeFileId && selectedFiles.find((f) => f.id === activeFileId && isAudioFile(f)) && (
+            {/* Audio Preview Card Display */}
+            {activeFileId && selectedFiles.find((f) => f.id === activeFileId && isAudioFile(f)) && (
               <motion.div
                 initial={{ opacity: 0, y: 15 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -2493,275 +2604,275 @@ export default function WorkspacePage() {
                       )}
                     </button>
                   </div>
-                 )}
-               </motion.div>
-             )}
-
-          {/* Video Preview Card Display */}
-          {activeFileId && selectedFiles.find((f) => f.id === activeFileId && isVideoFile(f)) && (
-            <motion.div
-              initial={{ opacity: 0, y: 15 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 rounded-3xl p-6 shadow-sm space-y-5 flex flex-col animate-fade-in"
-            >
-              {/* Header */}
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-zinc-800/50">
-                <div className="min-w-0">
-                  <h2 className="text-xs font-bold tracking-tight uppercase text-amber-500">Video Intelligence</h2>
-                  <p className="text-[10px] text-slate-400 dark:text-zinc-500 truncate max-w-[180px]">
-                    {selectedFiles.find((f) => f.id === activeFileId)?.name}
-                  </p>
-                </div>
-                <button
-                  onClick={() => setActiveFileId(null)}
-                  className="text-slate-400 hover:text-slate-650 dark:hover:text-zinc-200 cursor-pointer"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-
-              {/* Video Details / Player Cover */}
-              <div className="flex flex-col items-center justify-center p-4 border border-slate-100 dark:border-zinc-855 bg-slate-50/50 dark:bg-zinc-950/40 rounded-2xl text-center space-y-3">
-                <div className="h-12 w-12 rounded-2xl bg-amber-500/10 dark:bg-amber-400/10 flex items-center justify-center border border-amber-500/20 shrink-0">
-                  <Film className="h-6 w-6 text-amber-600 dark:text-amber-400" />
-                </div>
-
-                <div className="space-y-0.5 w-full px-2">
-                  <h3 className="text-xs font-bold truncate max-w-full text-slate-800 dark:text-zinc-200">
-                    {selectedFiles.find((f) => f.id === activeFileId)?.name}
-                  </h3>
-                  <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-0.5 text-[9px] text-slate-400 dark:text-zinc-500">
-                    <span>Size: {formatBytes(selectedFiles.find((f) => f.id === activeFileId)?.size || 0)}</span>
-                    <span>•</span>
-                    <span>
-                      Duration: {videoDurations[activeFileId]
-                        ? `${Math.floor(videoDurations[activeFileId] / 60)}:${Math.floor(videoDurations[activeFileId] % 60).toString().padStart(2, "0")}`
-                        : "Reading metadata..."}
-                    </span>
-                  </div>
-                </div>
-
-                {/* HTML5 Video Player */}
-                {selectedFiles.find((f) => f.id === activeFileId)?.savedName && (
-                  <video
-                    ref={videoRef}
-                    src={`${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1").replace("/api/v1", "")}/uploads/audio/${selectedFiles.find((f) => f.id === activeFileId)?.savedName}`}
-                    controls
-                    onLoadedMetadata={(e) => {
-                      const dur = e.currentTarget.duration;
-                      if (dur) {
-                        setVideoDurations((prev) => ({ ...prev, [activeFileId]: dur }));
-                      }
-                    }}
-                    className="w-full max-h-48 rounded-xl mt-1 bg-black focus:outline-none shadow-md border border-slate-100 dark:border-zinc-800"
-                  />
                 )}
-              </div>
+              </motion.div>
+            )}
 
-              {/* Indexing status & Action Button */}
-              {videoIndexResults[activeFileId] ? (
-                <div className="flex-1 flex flex-col min-h-0 space-y-4 animate-fade-in">
-                  {/* Status complete banner */}
-                  <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-[10px] space-y-3">
-                    <div className="flex items-center gap-2 font-bold text-emerald-600 dark:text-emerald-400">
-                      <span>✓ Processing Complete</span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2 text-slate-500 dark:text-zinc-450 leading-relaxed">
-                      <div>Video ID: <span className="font-semibold text-slate-700 dark:text-zinc-300 truncate block max-w-[100px]">{videoIndexResults[activeFileId].video_id}</span></div>
-                      <div>Total Chunks: <span className="font-semibold text-slate-700 dark:text-zinc-300">{videoIndexResults[activeFileId].total_chunks}</span></div>
-                      <div>Processing Time: <span className="font-semibold text-slate-700 dark:text-zinc-300">{videoIndexResults[activeFileId].processing_time}s</span></div>
-                      <div>FAISS Index: <span className="font-semibold text-slate-700 dark:text-zinc-300">IndexFlatL2 (384)</span></div>
+            {/* Video Preview Card Display */}
+            {activeFileId && selectedFiles.find((f) => f.id === activeFileId && isVideoFile(f)) && (
+              <motion.div
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 rounded-3xl p-6 shadow-sm space-y-5 flex flex-col animate-fade-in"
+              >
+                {/* Header */}
+                <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-zinc-800/50">
+                  <div className="min-w-0">
+                    <h2 className="text-xs font-bold tracking-tight uppercase text-amber-500">Video Intelligence</h2>
+                    <p className="text-[10px] text-slate-400 dark:text-zinc-500 truncate max-w-[180px]">
+                      {selectedFiles.find((f) => f.id === activeFileId)?.name}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setActiveFileId(null)}
+                    className="text-slate-400 hover:text-slate-650 dark:hover:text-zinc-200 cursor-pointer"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+
+                {/* Video Details / Player Cover */}
+                <div className="flex flex-col items-center justify-center p-4 border border-slate-100 dark:border-zinc-855 bg-slate-50/50 dark:bg-zinc-950/40 rounded-2xl text-center space-y-3">
+                  <div className="h-12 w-12 rounded-2xl bg-amber-500/10 dark:bg-amber-400/10 flex items-center justify-center border border-amber-500/20 shrink-0">
+                    <Film className="h-6 w-6 text-amber-600 dark:text-amber-400" />
+                  </div>
+
+                  <div className="space-y-0.5 w-full px-2">
+                    <h3 className="text-xs font-bold truncate max-w-full text-slate-800 dark:text-zinc-200">
+                      {selectedFiles.find((f) => f.id === activeFileId)?.name}
+                    </h3>
+                    <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-0.5 text-[9px] text-slate-400 dark:text-zinc-500">
+                      <span>Size: {formatBytes(selectedFiles.find((f) => f.id === activeFileId)?.size || 0)}</span>
+                      <span>•</span>
+                      <span>
+                        Duration: {videoDurations[activeFileId]
+                          ? `${Math.floor(videoDurations[activeFileId] / 60)}:${Math.floor(videoDurations[activeFileId] % 60).toString().padStart(2, "0")}`
+                          : "Reading metadata..."}
+                      </span>
                     </div>
                   </div>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {videoAnalyzeLoading ? (
-                    <div className="flex flex-col items-center justify-center py-6 space-y-4 bg-slate-50/50 dark:bg-zinc-950/40 border border-slate-100 dark:border-zinc-855 rounded-2xl">
-                      <div className="h-8 w-8 animate-spin rounded-full border-3 border-amber-500 border-t-transparent animate-spin" />
-                      <div className="space-y-1 text-center">
-                        <p className="text-xs font-bold text-slate-700 dark:text-zinc-300">{videoStage}</p>
-                        <p className="text-[10px] text-slate-400 dark:text-zinc-500 italic animate-pulse">This may take a moment...</p>
-                      </div>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => {
-                        const target = selectedFiles.find((f) => f.id === activeFileId);
-                        if (target?.savedName) {
-                          handleAnalyzeVideo(target.savedName);
+
+                  {/* HTML5 Video Player */}
+                  {selectedFiles.find((f) => f.id === activeFileId)?.savedName && (
+                    <video
+                      ref={videoRef}
+                      src={`${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1").replace("/api/v1", "")}/uploads/audio/${selectedFiles.find((f) => f.id === activeFileId)?.savedName}`}
+                      controls
+                      onLoadedMetadata={(e) => {
+                        const dur = e.currentTarget.duration;
+                        if (dur) {
+                          setVideoDurations((prev) => ({ ...prev, [activeFileId]: dur }));
                         }
                       }}
-                      className="w-full py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center gap-2 cursor-pointer border-0"
-                    >
-                      <Sparkles className="h-3.5 w-3.5" />
-                      <span>Analyze Video</span>
-                    </button>
+                      className="w-full max-h-48 rounded-xl mt-1 bg-black focus:outline-none shadow-md border border-slate-100 dark:border-zinc-800"
+                    />
                   )}
+                </div>
+
+                {/* Indexing status & Action Button */}
+                {videoIndexResults[activeFileId] ? (
+                  <div className="flex-1 flex flex-col min-h-0 space-y-4 animate-fade-in">
+                    {/* Status complete banner */}
+                    <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-[10px] space-y-3">
+                      <div className="flex items-center gap-2 font-bold text-emerald-600 dark:text-emerald-400">
+                        <span>✓ Processing Complete</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-slate-500 dark:text-zinc-450 leading-relaxed">
+                        <div>Video ID: <span className="font-semibold text-slate-700 dark:text-zinc-300 truncate block max-w-[100px]">{videoIndexResults[activeFileId].video_id}</span></div>
+                        <div>Total Chunks: <span className="font-semibold text-slate-700 dark:text-zinc-300">{videoIndexResults[activeFileId].total_chunks}</span></div>
+                        <div>Processing Time: <span className="font-semibold text-slate-700 dark:text-zinc-300">{videoIndexResults[activeFileId].processing_time}s</span></div>
+                        <div>FAISS Index: <span className="font-semibold text-slate-700 dark:text-zinc-300">IndexFlatL2 (384)</span></div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {videoAnalyzeLoading ? (
+                      <div className="flex flex-col items-center justify-center py-6 space-y-4 bg-slate-50/50 dark:bg-zinc-950/40 border border-slate-100 dark:border-zinc-855 rounded-2xl">
+                        <div className="h-8 w-8 animate-spin rounded-full border-3 border-amber-500 border-t-transparent animate-spin" />
+                        <div className="space-y-1 text-center">
+                          <p className="text-xs font-bold text-slate-700 dark:text-zinc-300">{videoStage}</p>
+                          <p className="text-[10px] text-slate-400 dark:text-zinc-500 italic animate-pulse">This may take a moment...</p>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          const target = selectedFiles.find((f) => f.id === activeFileId);
+                          if (target?.savedName) {
+                            handleAnalyzeVideo(target.savedName);
+                          }
+                        }}
+                        className="w-full py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center gap-2 cursor-pointer border-0"
+                      >
+                        <Sparkles className="h-3.5 w-3.5" />
+                        <span>Analyze Video</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+              </motion.div>
+            )}
+
+            {/* Analysis Results Display as Conversational Chat */}
+            {activeFileId && selectedFiles.find((f) => f.id === activeFileId)?.type.startsWith("image/") && (
+              <motion.div
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 rounded-3xl shadow-sm flex flex-col h-[500px] overflow-hidden"
+              >
+                {/* Chat Header */}
+                <div className="flex items-center justify-between p-4 border-b border-slate-100 dark:border-zinc-800/50 bg-slate-50/50 dark:bg-zinc-950/20">
+                  <div className="min-w-0">
+                    <h2 className="text-xs font-bold tracking-tight uppercase text-slate-500 dark:text-zinc-400">VisionGPT Chat</h2>
+                    <p className="text-[10px] text-slate-400 dark:text-zinc-500 truncate max-w-[180px]">
+                      {selectedFiles.find((f) => f.id === activeFileId)?.name || "Image Reasoning"}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setActiveFileId(null);
+                    }}
+                    className="text-slate-400 hover:text-slate-655 dark:hover:text-zinc-200 cursor-pointer"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+
+                {/* Chat Message Scrollable Area */}
+                <div
+                  ref={chatScrollRef}
+                  className="flex-1 overflow-y-auto p-4 space-y-4 text-xs scroll-smooth"
+                >
+                  {(chatHistories[activeFileId] || []).map((msg, idx) => {
+                    const isUser = msg.role === "user";
+                    return (
+                      <div
+                        key={idx}
+                        className={`flex ${isUser ? "justify-end" : "justify-start"}`}
+                      >
+                        <div
+                          className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 shadow-sm leading-relaxed whitespace-pre-wrap break-words ${isUser
+                            ? "bg-violet-600 text-white rounded-tr-none"
+                            : "bg-slate-100 dark:bg-zinc-850 text-slate-800 dark:text-zinc-250 rounded-tl-none border border-slate-200/20 dark:border-zinc-800/30"
+                            }`}
+                        >
+                          {msg.content}
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {/* Animated Thinking Indicator */}
+                  {analysisLoading && (
+                    <div className="flex justify-start">
+                      <div className="bg-slate-100 dark:bg-zinc-855 text-slate-500 dark:text-zinc-455 rounded-2xl rounded-tl-none px-3.5 py-2.5 border border-slate-200/20 dark:border-zinc-800/30 shadow-sm flex items-center gap-2">
+                        <div className="flex gap-1">
+                          <span className="w-1.5 h-1.5 bg-slate-400 dark:bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: "0ms" }}></span>
+                          <span className="w-1.5 h-1.5 bg-slate-400 dark:bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: "150ms" }}></span>
+                          <span className="w-1.5 h-1.5 bg-slate-400 dark:bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: "300ms" }}></span>
+                        </div>
+                        <span className="text-[10px] font-semibold italic">VisionGPT is thinking...</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Chat Input Area (Fixed at bottom) */}
+                <div className="p-3 border-t border-slate-100 dark:border-zinc-855 bg-slate-50/50 dark:bg-zinc-955/20">
+                  <div className="flex gap-2 items-end">
+                    <textarea
+                      value={currentInput}
+                      onChange={(e) => setCurrentInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          handleSendMessage();
+                        }
+                      }}
+                      placeholder="Ask anything about this image..."
+                      rows={2}
+                      disabled={analysisLoading}
+                      className="flex-1 px-3 py-2 rounded-xl text-xs border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 focus:outline-none focus:ring-2 focus:ring-violet-500/30 resize-none disabled:opacity-60 disabled:cursor-not-allowed max-h-20"
+                    />
+                    <button
+                      onClick={handleSendMessage}
+                      disabled={analysisLoading || !currentInput.trim()}
+                      className="px-4 py-2 rounded-xl bg-violet-650 hover:bg-violet-755 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center min-w-[70px] h-9 cursor-pointer"
+                    >
+                      Send
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {/* Recent Uploads Section */}
+            <motion.div
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.5, delay: 0.3 }}
+              className="space-y-4"
+            >
+              <h2 className="text-sm font-bold tracking-tight">Recent Uploads</h2>
+
+              {recentUploads.length > 0 ? (
+                <div className="space-y-3">
+                  {recentUploads.map((upload) => (
+                    <div
+                      key={upload.id}
+                      onClick={() => {
+                        if (upload.type.startsWith("image/")) {
+                          setPreviewImage(upload);
+                        }
+                      }}
+                      className={`flex items-center gap-3 p-3 rounded-2xl border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 shadow-sm transition-all ${upload.type.startsWith("image/")
+                        ? "cursor-pointer hover:border-violet-500/30 hover:bg-slate-100/50 dark:hover:bg-zinc-900/40"
+                        : ""
+                        }`}
+                    >
+                      {/* Thumbnail / Icon wrapper */}
+                      <div className="h-12 w-12 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-100 dark:border-zinc-800 overflow-hidden flex items-center justify-center shrink-0">
+                        {upload.type.startsWith("image/") ? (
+                          <img
+                            src={upload.url}
+                            alt={upload.name}
+                            className="h-full w-full object-cover"
+                            onError={(e) => {
+                              (e.target as HTMLElement).style.display = 'none';
+                            }}
+                          />
+                        ) : (
+                          React.createElement(getFileIcon(upload.type), { className: "h-5 w-5 text-slate-400" })
+                        )}
+                      </div>
+
+                      {/* Metadata */}
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-semibold text-slate-700 dark:text-zinc-200 truncate">{upload.name}</p>
+                        <p className="text-[9px] text-slate-400 dark:text-zinc-500">{upload.uploadTime}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                /* 3. Empty Recent Uploads section */
+                <div className="border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 rounded-3xl p-8 flex flex-col items-center justify-center text-center min-h-[300px] shadow-sm">
+                  <div className="space-y-4 flex flex-col items-center">
+                    <div className="h-12 w-12 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-100 dark:border-zinc-800 flex items-center justify-center text-slate-400 shadow-sm">
+                      <FolderOpen className="h-5 w-5" />
+                    </div>
+                    <div className="space-y-1">
+                      <h4 className="text-xs font-semibold">No uploaded files yet</h4>
+                      <p className="text-[10px] text-slate-400 dark:text-zinc-500 max-w-[200px] leading-relaxed">
+                        Files you upload in the workspace session will appear here for processing.
+                      </p>
+                    </div>
+                  </div>
                 </div>
               )}
             </motion.div>
-          )}
-
-          {/* Analysis Results Display as Conversational Chat */}
-          {activeFileId && selectedFiles.find((f) => f.id === activeFileId)?.type.startsWith("image/") && (
-            <motion.div
-              initial={{ opacity: 0, y: 15 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 rounded-3xl shadow-sm flex flex-col h-[500px] overflow-hidden"
-            >
-              {/* Chat Header */}
-              <div className="flex items-center justify-between p-4 border-b border-slate-100 dark:border-zinc-800/50 bg-slate-50/50 dark:bg-zinc-950/20">
-                <div className="min-w-0">
-                  <h2 className="text-xs font-bold tracking-tight uppercase text-slate-500 dark:text-zinc-400">VisionGPT Chat</h2>
-                  <p className="text-[10px] text-slate-400 dark:text-zinc-500 truncate max-w-[180px]">
-                    {selectedFiles.find((f) => f.id === activeFileId)?.name || "Image Reasoning"}
-                  </p>
-                </div>
-                <button
-                  onClick={() => {
-                    setActiveFileId(null);
-                  }}
-                  className="text-slate-400 hover:text-slate-655 dark:hover:text-zinc-200 cursor-pointer"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-
-              {/* Chat Message Scrollable Area */}
-              <div
-                ref={chatScrollRef}
-                className="flex-1 overflow-y-auto p-4 space-y-4 text-xs scroll-smooth"
-              >
-                {(chatHistories[activeFileId] || []).map((msg, idx) => {
-                  const isUser = msg.role === "user";
-                  return (
-                    <div
-                      key={idx}
-                      className={`flex ${isUser ? "justify-end" : "justify-start"}`}
-                    >
-                      <div
-                        className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 shadow-sm leading-relaxed whitespace-pre-wrap break-words ${isUser
-                          ? "bg-violet-600 text-white rounded-tr-none"
-                          : "bg-slate-100 dark:bg-zinc-850 text-slate-800 dark:text-zinc-250 rounded-tl-none border border-slate-200/20 dark:border-zinc-800/30"
-                          }`}
-                      >
-                        {msg.content}
-                      </div>
-                    </div>
-                  );
-                })}
-
-                {/* Animated Thinking Indicator */}
-                {analysisLoading && (
-                  <div className="flex justify-start">
-                    <div className="bg-slate-100 dark:bg-zinc-855 text-slate-500 dark:text-zinc-455 rounded-2xl rounded-tl-none px-3.5 py-2.5 border border-slate-200/20 dark:border-zinc-800/30 shadow-sm flex items-center gap-2">
-                      <div className="flex gap-1">
-                        <span className="w-1.5 h-1.5 bg-slate-400 dark:bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: "0ms" }}></span>
-                        <span className="w-1.5 h-1.5 bg-slate-400 dark:bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: "150ms" }}></span>
-                        <span className="w-1.5 h-1.5 bg-slate-400 dark:bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: "300ms" }}></span>
-                      </div>
-                      <span className="text-[10px] font-semibold italic">VisionGPT is thinking...</span>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Chat Input Area (Fixed at bottom) */}
-              <div className="p-3 border-t border-slate-100 dark:border-zinc-855 bg-slate-50/50 dark:bg-zinc-955/20">
-                <div className="flex gap-2 items-end">
-                  <textarea
-                    value={currentInput}
-                    onChange={(e) => setCurrentInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        handleSendMessage();
-                      }
-                    }}
-                    placeholder="Ask anything about this image..."
-                    rows={2}
-                    disabled={analysisLoading}
-                    className="flex-1 px-3 py-2 rounded-xl text-xs border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 focus:outline-none focus:ring-2 focus:ring-violet-500/30 resize-none disabled:opacity-60 disabled:cursor-not-allowed max-h-20"
-                  />
-                  <button
-                    onClick={handleSendMessage}
-                    disabled={analysisLoading || !currentInput.trim()}
-                    className="px-4 py-2 rounded-xl bg-violet-650 hover:bg-violet-755 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold shadow-sm transition-all transform active:scale-95 flex items-center justify-center min-w-[70px] h-9 cursor-pointer"
-                  >
-                    Send
-                  </button>
-                </div>
-              </div>
-            </motion.div>
-          )}
-
-          {/* Recent Uploads Section */}
-          <motion.div
-            initial={{ opacity: 0, x: 20 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ duration: 0.5, delay: 0.3 }}
-            className="space-y-4"
-          >
-            <h2 className="text-sm font-bold tracking-tight">Recent Uploads</h2>
-
-            {recentUploads.length > 0 ? (
-              <div className="space-y-3">
-                {recentUploads.map((upload) => (
-                  <div
-                    key={upload.id}
-                    onClick={() => {
-                      if (upload.type.startsWith("image/")) {
-                        setPreviewImage(upload);
-                      }
-                    }}
-                    className={`flex items-center gap-3 p-3 rounded-2xl border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 shadow-sm transition-all ${upload.type.startsWith("image/")
-                      ? "cursor-pointer hover:border-violet-500/30 hover:bg-slate-100/50 dark:hover:bg-zinc-900/40"
-                      : ""
-                      }`}
-                  >
-                    {/* Thumbnail / Icon wrapper */}
-                    <div className="h-12 w-12 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-100 dark:border-zinc-800 overflow-hidden flex items-center justify-center shrink-0">
-                      {upload.type.startsWith("image/") ? (
-                        <img
-                          src={upload.url}
-                          alt={upload.name}
-                          className="h-full w-full object-cover"
-                          onError={(e) => {
-                            (e.target as HTMLElement).style.display = 'none';
-                          }}
-                        />
-                      ) : (
-                        React.createElement(getFileIcon(upload.type), { className: "h-5 w-5 text-slate-400" })
-                      )}
-                    </div>
-
-                    {/* Metadata */}
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold text-slate-700 dark:text-zinc-200 truncate">{upload.name}</p>
-                      <p className="text-[9px] text-slate-400 dark:text-zinc-500">{upload.uploadTime}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              /* 3. Empty Recent Uploads section */
-              <div className="border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 rounded-3xl p-8 flex flex-col items-center justify-center text-center min-h-[300px] shadow-sm">
-                <div className="space-y-4 flex flex-col items-center">
-                  <div className="h-12 w-12 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-100 dark:border-zinc-800 flex items-center justify-center text-slate-400 shadow-sm">
-                    <FolderOpen className="h-5 w-5" />
-                  </div>
-                  <div className="space-y-1">
-                    <h4 className="text-xs font-semibold">No uploaded files yet</h4>
-                    <p className="text-[10px] text-slate-400 dark:text-zinc-500 max-w-[200px] leading-relaxed">
-                      Files you upload in the workspace session will appear here for processing.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
-          </motion.div>
-        </div>
+          </div>
 
         </div>
       )}

@@ -5,11 +5,42 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, status
 
 from app.core.config import settings
-from app.schemas.video import VideoChatRequestSchema, VideoChatResponseSchema
+from app.schemas.video import VideoChatRequestSchema, VideoChatResponseSchema, VideoIndexRequestSchema
 from app.core.rag import execute_local_rag
+from app.core.video import index_video_multimodal
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+@router.post("/index", status_code=status.HTTP_200_OK)
+async def index_video(payload: VideoIndexRequestSchema):
+    """
+    Triggers multimodal video frame extraction, speech transcription,
+    timeline merging, embedding generation, and FAISS indexing.
+    """
+    safe_filename = os.path.basename(payload.filename)
+    video_path = Path(settings.UPLOAD_DIR) / "audio" / safe_filename
+    
+    if not video_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="The requested video file was not found in the uploads directory."
+        )
+        
+    try:
+        # Run indexing pipeline
+        result = index_video_multimodal(
+            video_path=video_path,
+            interval_seconds=3.0,
+            window_size=15.0
+        )
+        return result
+    except Exception as e:
+        logger.exception("Failed to index video file")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Video indexing failed: {str(e)}"
+        )
 
 @router.post("/chat", response_model=VideoChatResponseSchema, status_code=status.HTTP_200_OK)
 async def chat_video(payload: VideoChatRequestSchema):

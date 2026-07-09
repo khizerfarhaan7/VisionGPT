@@ -168,7 +168,7 @@ async def upload_pdf(file: UploadFile = File(...)):
     }
 
 AUDIO_MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
-ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".mp4"}
+ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 @router.post("/audio", response_model=AudioUploadResponseSchema, status_code=status.HTTP_200_OK)
 async def upload_audio(file: UploadFile = File(...)):

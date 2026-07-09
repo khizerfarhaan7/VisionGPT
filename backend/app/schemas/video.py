@@ -18,3 +18,6 @@ class VideoChatResponseSchema(BaseModel):
     success: bool
     answer: str
     sources: List[VideoChatSourceSchema]
+
+class VideoIndexRequestSchema(BaseModel):
+    filename: str

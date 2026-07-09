@@ -411,6 +411,88 @@ class VideoService:
             "timeline": timeline
         }
 
+    def index_video_multimodal(
+        self,
+        video_path: Union[str, Path],
+        interval_seconds: float = 3.0,
+        window_size: float = 15.0
+    ) -> Dict[str, Any]:
+        """
+        Runs multimodal video processing, segments the chronologically merged timeline
+        into semantic chunks, generates embeddings using the shared model, and builds
+        a isolated FAISS vector index.
+        """
+        import time
+        import faiss
+        import json
+        from app.core.rag import get_embedding_model
+        
+        start_time = time.time()
+        
+        video_file = Path(video_path)
+        video_id = video_file.stem
+        
+        # Step 1: Multimodal Processing
+        logger.info(f"Step 1: Running multimodal audio/vision timeline generation for: {video_file.name}")
+        pipeline_result = self.process_video_multimodal(video_file, interval_seconds)
+        
+        timeline = pipeline_result["timeline"]
+        full_transcript = pipeline_result["transcript"]
+        raw_frames = pipeline_result["frames"]
+        
+        # Step 2: Semantic Chunking
+        logger.info(f"Step 2: Segmenting chronological timeline into {window_size}s windows...")
+        chunks = chunk_multimodal_timeline(timeline, window_size)
+        logger.info(f"Created {len(chunks)} multimodal semantic chunks.")
+        
+        # Step 3: Vector Indexing
+        vector_store_dir = Path(settings.UPLOAD_DIR) / "vector_store" / "video" / video_id
+        vector_store_dir.mkdir(parents=True, exist_ok=True)
+        
+        index_path = vector_store_dir / "faiss.index"
+        metadata_path = vector_store_dir / "metadata.json"
+        
+        logger.info(f"Step 3: Generating embeddings for {len(chunks)} chunks and saving FAISS index...")
+        try:
+            if len(chunks) > 0:
+                embed_model = get_embedding_model()
+                sentences = [c["text"] for c in chunks]
+                
+                embed_start = time.time()
+                embeddings = embed_model.encode(sentences, convert_to_numpy=True)
+                embed_time = time.time() - embed_start
+                logger.info(f"Generated embeddings in {embed_time:.2f}s.")
+                
+                dimension = int(embeddings.shape[1])
+                index = faiss.IndexFlatL2(dimension)
+                index.add(embeddings.astype("float32"))
+                faiss.write_index(index, str(index_path))
+            else:
+                # Fallback for empty chunks case
+                dimension = 384
+                index = faiss.IndexFlatL2(dimension)
+                faiss.write_index(index, str(index_path))
+                
+            # Step 4: Write Metadata JSON
+            with open(metadata_path, "w", encoding="utf-8") as f:
+                json.dump(chunks, f, ensure_ascii=False, indent=2)
+                
+            total_time = time.time() - start_time
+            logger.info(f"Successfully built FAISS index and metadata.json in {total_time:.2f}s.")
+            
+            return {
+                "success": True,
+                "video_id": video_id,
+                "total_chunks": len(chunks),
+                "index_location": str(index_path),
+                "metadata_location": str(metadata_path),
+                "processing_time": round(total_time, 2)
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to generate embeddings and build FAISS index: {str(e)}", exc_info=True)
+            raise RuntimeError(f"Video indexing failed: {str(e)}") from e
+
 
 def extract_audio(video_path: Path, output_audio_path: Path) -> bool:
     """
@@ -477,6 +559,55 @@ def merge_timeline(frames: list[dict], speech_segments: list[dict]) -> list[dict
     return timeline
 
 
+def chunk_multimodal_timeline(timeline: list[dict], window_size: float = 15.0) -> list[dict]:
+    """
+    Groups speech segments and visual frame captions into chronological window chunks.
+    Each chunk covers a timestamp range (e.g. 0s-15s) and joins content for embeddings.
+    """
+    if not timeline:
+        return []
+    
+    max_time = max(event["timestamp"] for event in timeline)
+    chunks = []
+    chunk_idx = 0
+    
+    # Segment timeline into time windows
+    num_windows = int(max_time // window_size) + 1
+    for i in range(num_windows):
+        w_start = i * window_size
+        w_end = w_start + window_size
+        
+        speech_events = [e for e in timeline if e["type"] == "speech" and w_start <= e["timestamp"] < w_end]
+        vision_events = [e for e in timeline if e["type"] == "vision" and w_start <= e["timestamp"] < w_end]
+        
+        if not speech_events and not vision_events:
+            continue
+            
+        speech_text = " ".join([e["content"] for e in speech_events]).strip()
+        vision_text = " ".join([e["content"] for e in vision_events]).strip()
+        
+        # Format text payload for embeddings and RAG context
+        text_parts = [f"{w_start:.1f}s–{w_end:.1f}s"]
+        if speech_text:
+            text_parts.append(f"Speech:\n\"{speech_text}\"")
+        if vision_text:
+            text_parts.append(f"Vision:\n\"{vision_text}\"")
+            
+        chunk_text = "\n\n".join(text_parts)
+        
+        chunks.append({
+            "chunk_id": f"chunk_{chunk_idx}",
+            "start_time": w_start,
+            "end_time": w_end,
+            "text": chunk_text,
+            "speech": speech_text,
+            "vision": vision_text
+        })
+        chunk_idx += 1
+        
+    return chunks
+
+
 # Singleton instance
 _video_service_instance = None
 
@@ -514,3 +645,11 @@ def process_video_multimodal(
 ) -> Dict[str, Any]:
     """Helper wrapper function to perform unified chronological multimodal audio/vision understanding on a video."""
     return get_video_service().process_video_multimodal(video_path, interval_seconds)
+
+def index_video_multimodal(
+    video_path: Union[str, Path],
+    interval_seconds: float = 3.0,
+    window_size: float = 15.0
+) -> Dict[str, Any]:
+    """Helper wrapper function to perform video timeline processing, semantic chunking, and FAISS indexing."""
+    return get_video_service().index_video_multimodal(video_path, interval_seconds, window_size)

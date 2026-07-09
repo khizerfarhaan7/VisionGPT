@@ -597,6 +597,7 @@ def chunk_multimodal_timeline(timeline: list[dict], window_size: float = 15.0) -
         
         chunks.append({
             "chunk_id": f"chunk_{chunk_idx}",
+            "page": "video",
             "start_time": w_start,
             "end_time": w_end,
             "text": chunk_text,

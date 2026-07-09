@@ -8,6 +8,7 @@ from PIL import Image
 import av
 
 from app.core.config import settings
+from app.core.vision import describe_image
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,24 @@ class VideoProcessor(ABC):
         Processes the video file and returns any extracted features.
         """
         pass
+
+
+class VisionCaptionFrameProcessor(FrameProcessor):
+    """
+    Frame processor that uses the Vision Service to generate natural language captions
+    for each extracted frame.
+    """
+    def process_frame(self, frame_data: Dict[str, Any], image: Image.Image) -> Dict[str, Any]:
+        logger.info(f"Generating caption for frame {frame_data['frame_number']} (timestamp: {frame_data['timestamp']:.2f}s)...")
+        try:
+            # Reuses describe_image from vision.py
+            caption = describe_image(image)
+            logger.info(f"Successfully generated caption for frame {frame_data['frame_number']}: {caption}")
+            return {"caption": caption}
+        except Exception as e:
+            logger.error(f"Failed to generate caption for frame {frame_data['frame_number']}: {str(e)}")
+            # Handle failures gracefully by returning an error message for this frame and allowing the rest to continue
+            return {"caption": f"Error: Caption generation failed: {str(e)}"}
 
 
 class VideoService:
@@ -239,6 +258,66 @@ class VideoService:
             except Exception as e:
                 logger.error(f"Failed to delete directory {p}: {str(e)}")
 
+    def describe_video(
+        self,
+        video_path: Union[str, Path],
+        interval_seconds: float = 3.0,
+        output_dir: Optional[Union[str, Path]] = None,
+        cleanup: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Extracts frames and generates captions for each frame sequentially.
+        Optionally cleans up frame image files after captioning completes.
+        """
+        import time
+        start_time = time.time()
+        
+        # Ensure VisionCaptionFrameProcessor is registered
+        has_caption_processor = any(
+            isinstance(p, VisionCaptionFrameProcessor) for p in self._frame_processors
+        )
+        if not has_caption_processor:
+            self.register_frame_processor(VisionCaptionFrameProcessor())
+            
+        video_file = Path(video_path)
+        logger.info(f"Starting video description pipeline for: {video_file.name}")
+        
+        # Determine output path for temporary storage
+        if output_dir is None:
+            video_id = video_file.stem
+            temp_path = Path(settings.UPLOAD_DIR) / "temp" / "video_processing" / video_id
+        else:
+            temp_path = Path(output_dir)
+            
+        try:
+            # Step 1: Extract frames (which automatically triggers the caption processor)
+            raw_frames = self.extract_frames(
+                video_path=video_file,
+                interval_seconds=interval_seconds,
+                output_dir=temp_path
+            )
+            
+            # Step 2: Format the structured result
+            formatted_frames = []
+            for f in raw_frames:
+                formatted_frames.append({
+                    "frame_number": f["frame_number"],
+                    "timestamp": f["timestamp"],
+                    "filename": f["filename"],
+                    "caption": f.get("caption", "Error: Caption missing")
+                })
+                
+            elapsed_time = time.time() - start_time
+            logger.info(f"Video description pipeline completed in {elapsed_time:.2f}s for {video_file.name}")
+            
+            return {
+                "frames": formatted_frames
+            }
+        finally:
+            if cleanup:
+                logger.info(f"Cleaning up temporary frame directory: {temp_path}")
+                self.cleanup_directory(temp_path)
+
 
 # Singleton instance
 _video_service_instance = None
@@ -261,3 +340,12 @@ def extract_frames(
 ) -> List[Dict[str, Any]]:
     """Helper wrapper function to extract frames from a video."""
     return get_video_service().extract_frames(video_path, interval_seconds, output_dir)
+
+def describe_video(
+    video_path: Union[str, Path],
+    interval_seconds: float = 3.0,
+    output_dir: Optional[Union[str, Path]] = None,
+    cleanup: bool = True
+) -> Dict[str, Any]:
+    """Helper wrapper function to describe all extracted frames of a video."""
+    return get_video_service().describe_video(video_path, interval_seconds, output_dir, cleanup)

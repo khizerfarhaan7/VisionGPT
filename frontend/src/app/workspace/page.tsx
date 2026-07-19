@@ -15,7 +15,8 @@ import {
   X,
   Copy,
   Download,
-  Search
+  Search,
+  Globe
 } from "lucide-react";
 
 interface SelectedFile {
@@ -82,6 +83,7 @@ interface PDFChatMessage {
 }
 
 export default function WorkspacePage() {
+  const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<"upload" | "search">("upload");
   const [isDragActive, setIsDragActive] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<SelectedFile[]>([]);
   const [recentUploads, setRecentUploads] = useState<RecentUpload[]>([]);
@@ -1033,7 +1035,34 @@ export default function WorkspacePage() {
         </p>
       </motion.div>
 
-      {activeFileId && selectedFiles.find(f => f.id === activeFileId && isVideoFile(f)) && videoDashboardLoading[activeFileId] ? (
+      {/* Workspace Tabs */}
+      <div className="flex border-b border-slate-200 dark:border-zinc-800/80 gap-6">
+        <button
+          onClick={() => setActiveWorkspaceTab("upload")}
+          className={`pb-3 text-sm font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
+            activeWorkspaceTab === "upload"
+              ? "border-indigo-500 text-indigo-650 dark:text-indigo-400 dark:border-indigo-400 font-bold"
+              : "border-transparent text-slate-400 dark:text-zinc-500 hover:text-slate-600 dark:hover:text-zinc-300"
+          }`}
+        >
+          <UploadCloud className="h-4 w-4" />
+          <span>Upload File</span>
+        </button>
+        <button
+          onClick={() => setActiveWorkspaceTab("search")}
+          className={`pb-3 text-sm font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
+            activeWorkspaceTab === "search"
+              ? "border-indigo-500 text-indigo-650 dark:text-indigo-400 dark:border-indigo-400 font-bold"
+              : "border-transparent text-slate-400 dark:text-zinc-500 hover:text-slate-600 dark:hover:text-zinc-300"
+          }`}
+        >
+          <Globe className="h-4 w-4" />
+          <span>Search from Web</span>
+        </button>
+      </div>
+
+      {activeWorkspaceTab === "upload" ? (
+        activeFileId && selectedFiles.find(f => f.id === activeFileId && isVideoFile(f)) && videoDashboardLoading[activeFileId] ? (
         /* Video Intelligence Dashboard Skeleton Loader */
         <div className="border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 rounded-3xl p-6 md:p-8 shadow-md flex flex-col space-y-6 animate-pulse">
           {/* Header Skeleton */}
@@ -2764,6 +2793,24 @@ export default function WorkspacePage() {
         </div>
 
         </div>
+      )) : (
+        <motion.div
+          initial={{ opacity: 0, y: 15 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 rounded-3xl p-16 flex flex-col items-center justify-center text-center min-h-[450px] shadow-sm w-full"
+        >
+          <div className="space-y-6 flex flex-col items-center max-w-md">
+            <div className="h-16 w-16 rounded-2xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center border border-indigo-500/20 shadow-sm">
+              <Globe className="h-8 w-8 text-indigo-500" />
+            </div>
+            <div className="space-y-2">
+              <h2 className="text-xl font-extrabold tracking-tight">Search from Web</h2>
+              <p className="text-sm text-slate-500 dark:text-zinc-400 leading-relaxed">
+                Search online resources and import them into VisionGPT for analysis.
+              </p>
+            </div>
+          </div>
+        </motion.div>
       )}
 
       {/* Image Preview Modal */}

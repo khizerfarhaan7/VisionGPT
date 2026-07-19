@@ -85,6 +85,7 @@ interface PDFChatMessage {
 export default function WorkspacePage() {
   const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<"upload" | "search">("upload");
   const [webSearchQuery, setWebSearchQuery] = useState("");
+  const [selectedContentType, setSelectedContentType] = useState<"pdf" | "youtube" | "audio">("pdf");
   const [isDragActive, setIsDragActive] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<SelectedFile[]>([]);
   const [recentUploads, setRecentUploads] = useState<RecentUpload[]>([]);
@@ -2852,6 +2853,57 @@ export default function WorkspacePage() {
                   {query}
                 </button>
               ))}
+            </div>
+
+            {/* Content Type Selector */}
+            <div className="pt-6 border-t border-slate-100 dark:border-zinc-800/60 space-y-3 w-full text-left">
+              <h3 className="text-xs font-bold tracking-wider text-slate-400 dark:text-zinc-500 uppercase">
+                Content Type
+              </h3>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+                {[
+                  {
+                    id: "pdf",
+                    icon: "📄",
+                    title: "PDF",
+                    description: "Search research papers, notes, books and PDF documents."
+                  },
+                  {
+                    id: "youtube",
+                    icon: "▶️",
+                    title: "YouTube",
+                    description: "Search YouTube videos and educational lectures."
+                  },
+                  {
+                    id: "audio",
+                    icon: "🎵",
+                    title: "Audio",
+                    description: "Search podcasts, audio lectures and recordings."
+                  }
+                ].map((type) => {
+                  const isSelected = selectedContentType === type.id;
+                  return (
+                    <button
+                      key={type.id}
+                      type="button"
+                      onClick={() => setSelectedContentType(type.id as "pdf" | "youtube" | "audio")}
+                      className={`p-4 rounded-2xl text-left transition-all duration-200 cursor-pointer relative overflow-hidden flex flex-col justify-between space-y-2 border ${
+                        isSelected
+                          ? "border-indigo-500 dark:border-indigo-400 bg-indigo-500/10 dark:bg-indigo-500/15 shadow-lg shadow-indigo-500/10 ring-1 ring-indigo-500/20 scale-[1.01]"
+                          : "border-slate-200/80 dark:border-zinc-800/80 bg-white/80 dark:bg-zinc-900/40 hover:border-slate-300 dark:hover:border-zinc-700 hover:bg-slate-50/80 dark:hover:bg-zinc-800/50 hover:scale-[1.01]"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 text-sm font-bold text-slate-800 dark:text-zinc-100">
+                        <span className="text-base">{type.icon}</span>
+                        <span>{type.title}</span>
+                      </div>
+                      <p className="text-xs text-slate-500 dark:text-zinc-400 leading-relaxed font-normal">
+                        {type.description}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
         </motion.div>

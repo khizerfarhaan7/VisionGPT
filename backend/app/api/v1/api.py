@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import health, upload, analysis, pdf, audio, video, web_search
+from app.api.v1.endpoints import health, upload, analysis, pdf, audio, video, web_search, import_analyze
 
 api_router = APIRouter()
 api_router.include_router(health.router, prefix="/health", tags=["health"])
@@ -9,3 +9,5 @@ api_router.include_router(pdf.router, prefix="/pdf", tags=["pdf"])
 api_router.include_router(audio.router, prefix="/audio", tags=["audio"])
 api_router.include_router(video.router, prefix="/video", tags=["video"])
 api_router.include_router(web_search.router, prefix="/web-search", tags=["web-search"])
+api_router.include_router(import_analyze.router, prefix="/import", tags=["import"])
+

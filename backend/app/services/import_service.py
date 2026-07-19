@@ -2,8 +2,11 @@ import os
 import uuid
 import logging
 from pathlib import Path
+from urllib.parse import urlparse
+import asyncio
 import httpx
 import fitz  # PyMuPDF
+import yt_dlp
 from fastapi import HTTPException, status
 from app.core.config import settings
 from app.schemas.import_schema import ImportAnalyzeResponseSchema, ContentTypeLiteral
@@ -14,6 +17,23 @@ logger = logging.getLogger(__name__)
 
 MAX_PDF_DOWNLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
 DOWNLOAD_TIMEOUT = 30.0  # 30 seconds timeout
+
+def is_valid_youtube_url(url: str) -> bool:
+    """
+    Validate that the provided URL belongs to YouTube.
+    """
+    try:
+        parsed = urlparse(url)
+        hostname = (parsed.hostname or "").lower()
+        if not any(domain in hostname for domain in ["youtube.com", "youtu.be"]):
+            return False
+        if "youtu.be" in hostname and len(parsed.path.strip("/")) > 0:
+            return True
+        if "youtube.com" in hostname and any(p in parsed.path for p in ["/watch", "/shorts", "/v/", "/embed"]):
+            return True
+        return False
+    except Exception:
+        return False
 
 class ImportService:
     """
@@ -149,13 +169,110 @@ class ImportService:
 
     @staticmethod
     async def route_to_youtube(url: str) -> ImportAnalyzeResponseSchema:
-        """Placeholder for YouTube import pipeline."""
-        return ImportAnalyzeResponseSchema(
-            success=True,
-            message="Import pipeline initialized.",
-            content_type="youtube",
-            status="pending"
-        )
+        """
+        YouTube import pipeline:
+        1. Validates YouTube URL.
+        2. Downloads video and extracts audio using yt-dlp.
+        3. Cleans up temporary video files, keeping extracted audio in uploads/audio/.
+        4. Returns metadata (title, duration, channel, audio_path).
+        """
+        if not is_valid_youtube_url(url):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid YouTube URL. Please provide a valid YouTube link."
+            )
+
+        audio_dir = Path(settings.UPLOAD_DIR) / "audio"
+        audio_dir.mkdir(parents=True, exist_ok=True)
+
+        audio_id = str(uuid.uuid4())
+        outtmpl = str(audio_dir / f"{audio_id}.%(ext)s")
+
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': outtmpl,
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'quiet': True,
+            'no_warnings': True,
+            'nocheckcertificate': True,
+            'keepvideo': False,
+        }
+
+        try:
+            def run_yt_dlp():
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=True)
+                    return info
+
+            loop = asyncio.get_running_loop()
+            info_dict = await loop.run_in_executor(None, run_yt_dlp)
+
+            if not info_dict:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Unable to fetch video metadata from YouTube."
+                )
+
+            # Resolve the saved audio file
+            saved_audio_file = None
+            possible_files = list(audio_dir.glob(f"{audio_id}.*"))
+
+            for file_path in possible_files:
+                if file_path.suffix.lower() in [".mp4", ".webm", ".mkv", ".mov", ".avi"]:
+                    file_path.unlink(missing_ok=True)
+                elif file_path.suffix.lower() in [".mp3", ".m4a", ".wav", ".ogg", ".opus"]:
+                    saved_audio_file = file_path
+
+            if not saved_audio_file or not saved_audio_file.exists():
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to extract audio from YouTube video."
+                )
+
+            relative_audio_path = f"uploads/audio/{saved_audio_file.name}"
+            title = info_dict.get("title") or "YouTube Video"
+            duration = info_dict.get("duration") or 0
+            channel = info_dict.get("uploader") or info_dict.get("channel") or "Unknown Channel"
+
+            return ImportAnalyzeResponseSchema(
+                success=True,
+                message="YouTube video downloaded successfully.",
+                content_type="youtube",
+                status="ready_for_transcription",
+                title=title,
+                duration=duration,
+                channel=channel,
+                audio_path=relative_audio_path
+            )
+
+        except yt_dlp.utils.DownloadError as e:
+            err_msg = str(e).lower()
+            if "private" in err_msg:
+                detail = "This YouTube video is private."
+            elif "removed" in err_msg or "not available" in err_msg:
+                detail = "This YouTube video is unavailable or has been removed."
+            elif "age" in err_msg or "sign in" in err_msg:
+                detail = "This YouTube video is age-restricted or requires login."
+            else:
+                detail = "Failed to download YouTube video. Please check the URL and try again."
+
+            logger.error(f"yt-dlp DownloadError: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=detail
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected YouTube import error: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="An error occurred while processing the YouTube video."
+            )
 
     @staticmethod
     async def route_to_audio(url: str) -> ImportAnalyzeResponseSchema:

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, field_validator
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 
 ContentTypeLiteral = Literal["pdf", "youtube", "audio"]
 
@@ -22,8 +22,14 @@ class ImportAnalyzeResponseSchema(BaseModel):
     message: str
     content_type: ContentTypeLiteral
     status: str
+    # PDF metadata fields
     filename: Optional[str] = None
     page_count: Optional[int] = None
     total_vectors: Optional[int] = None
     index_location: Optional[str] = None
     metadata_location: Optional[str] = None
+    # YouTube / Audio metadata fields
+    title: Optional[str] = None
+    duration: Optional[Union[int, float, str]] = None
+    channel: Optional[str] = None
+    audio_path: Optional[str] = None

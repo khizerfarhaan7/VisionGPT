@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from "react";
+import { importAnalyzeResource } from "@/services/importApi";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   UploadCloud,
@@ -107,6 +108,44 @@ export default function WorkspacePage() {
   const [searchValidationError, setSearchValidationError] = useState<string | null>(null);
   const [searchApiError, setSearchApiError] = useState<string | null>(null);
   const [isWebSearching, setIsWebSearching] = useState(false);
+
+  // Independent import state per search result URL
+  const [importStatuses, setImportStatuses] = useState<Record<string, "idle" | "importing" | "imported" | "failed">>({});
+  const [importErrorMessages, setImportErrorMessages] = useState<Record<string, string>>({});
+
+  const handleImportAnalyze = async (resultUrl: string, resultType: string) => {
+    const normalizedType = resultType.toLowerCase();
+    if (normalizedType !== "pdf") {
+      return;
+    }
+
+    if (importStatuses[resultUrl] === "importing" || importStatuses[resultUrl] === "imported") {
+      return;
+    }
+
+    setImportStatuses((prev) => ({ ...prev, [resultUrl]: "importing" }));
+    setImportErrorMessages((prev) => ({ ...prev, [resultUrl]: "" }));
+
+    try {
+      const data = await importAnalyzeResource(resultUrl, "pdf");
+      if (data.success) {
+        setImportStatuses((prev) => ({ ...prev, [resultUrl]: "imported" }));
+      } else {
+        setImportStatuses((prev) => ({ ...prev, [resultUrl]: "failed" }));
+        setImportErrorMessages((prev) => ({
+          ...prev,
+          [resultUrl]: data.message || "Unable to import PDF. Please try again."
+        }));
+      }
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : "Unable to import PDF. Please try again.";
+      setImportStatuses((prev) => ({ ...prev, [resultUrl]: "failed" }));
+      setImportErrorMessages((prev) => ({
+        ...prev,
+        [resultUrl]: errMsg
+      }));
+    }
+  };
 
   const handleWebSearch = async (queryOverride?: string) => {
     if (isWebSearching) return;
@@ -3018,46 +3057,84 @@ export default function WorkspacePage() {
                       if (lower === "audio") return "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20";
                       return "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-500/20";
                     };
+
+                    const status = importStatuses[result.url] || "idle";
+                    const itemError = importErrorMessages[result.url];
+
                     return (
-                      <div
-                        key={idx}
-                        className="p-5 rounded-2xl border border-slate-200/80 dark:border-zinc-800/80 bg-white/90 dark:bg-zinc-900/40 shadow-sm hover:shadow-md hover:border-slate-300 dark:hover:border-zinc-700 transition-all duration-200 flex flex-col md:flex-row md:items-center justify-between gap-4"
-                      >
-                        <div className="space-y-1.5 min-w-0 flex-1">
-                          <div className="flex items-center gap-2.5 flex-wrap">
-                            <h4 className="text-sm font-bold text-slate-800 dark:text-zinc-100 truncate">
-                              {result.title}
-                            </h4>
-                            <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border uppercase ${getBadgeColor(result.type)}`}>
-                              {result.type}
-                            </span>
+                      <div key={idx} className="space-y-1">
+                        <div
+                          className="p-5 rounded-2xl border border-slate-200/80 dark:border-zinc-800/80 bg-white/90 dark:bg-zinc-900/40 shadow-sm hover:shadow-md hover:border-slate-300 dark:hover:border-zinc-700 transition-all duration-200 flex flex-col md:flex-row md:items-center justify-between gap-4"
+                        >
+                          <div className="space-y-1.5 min-w-0 flex-1">
+                            <div className="flex items-center gap-2.5 flex-wrap">
+                              <h4 className="text-sm font-bold text-slate-800 dark:text-zinc-100 truncate">
+                                {result.title}
+                              </h4>
+                              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border uppercase ${getBadgeColor(result.type)}`}>
+                                {result.type}
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-400 dark:text-zinc-500 font-mono truncate">
+                              {result.url}
+                            </p>
                           </div>
-                          <p className="text-xs text-slate-400 dark:text-zinc-500 font-mono truncate">
-                            {result.url}
-                          </p>
+
+                          <div className="flex items-center gap-2.5 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-slate-100 dark:border-zinc-800/50">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (result.url) {
+                                  window.open(result.url, "_blank", "noopener,noreferrer");
+                                }
+                              }}
+                              className="px-3.5 py-2 rounded-xl text-xs font-semibold border border-slate-200 dark:border-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-600 dark:text-zinc-350 transition-all cursor-pointer flex items-center gap-1.5"
+                            >
+                              <ExternalLink className="h-3.5 w-3.5" />
+                              <span>Open Link</span>
+                            </button>
+
+                            {result.type.toLowerCase() === "pdf" ? (
+                              <button
+                                type="button"
+                                disabled={status === "importing" || status === "imported"}
+                                onClick={() => handleImportAnalyze(result.url, result.type)}
+                                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border-0 ${
+                                  status === "imported"
+                                    ? "bg-emerald-600 text-white cursor-default opacity-90"
+                                    : status === "importing"
+                                    ? "bg-indigo-600/70 text-white cursor-wait opacity-80"
+                                    : "bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm cursor-pointer active:scale-95"
+                                }`}
+                              >
+                                {status === "importing" ? (
+                                  <span>Importing...</span>
+                                ) : status === "imported" ? (
+                                  <span>Imported ✓</span>
+                                ) : (
+                                  <>
+                                    <Sparkles className="h-3.5 w-3.5" />
+                                    <span>Import & Analyze</span>
+                                  </>
+                                )}
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                className="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm transition-all cursor-pointer flex items-center gap-1.5 border-0"
+                              >
+                                <Sparkles className="h-3.5 w-3.5" />
+                                <span>Import & Analyze</span>
+                              </button>
+                            )}
+                          </div>
                         </div>
 
-                        <div className="flex items-center gap-2.5 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-slate-100 dark:border-zinc-800/50">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (result.url) {
-                                window.open(result.url, "_blank", "noopener,noreferrer");
-                              }
-                            }}
-                            className="px-3.5 py-2 rounded-xl text-xs font-semibold border border-slate-200 dark:border-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-600 dark:text-zinc-350 transition-all cursor-pointer flex items-center gap-1.5"
-                          >
-                            <ExternalLink className="h-3.5 w-3.5" />
-                            <span>Open Link</span>
-                          </button>
-                          <button
-                            type="button"
-                            className="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm transition-all cursor-pointer flex items-center gap-1.5 border-0"
-                          >
-                            <Sparkles className="h-3.5 w-3.5" />
-                            <span>Import & Analyze</span>
-                          </button>
-                        </div>
+                        {itemError && (
+                          <p className="text-xs font-semibold text-red-500 text-left px-2 pt-0.5">
+                            {itemError}
+                          </p>
+                        )}
                       </div>
                     );
                   })}

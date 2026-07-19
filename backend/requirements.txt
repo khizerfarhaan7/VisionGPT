@@ -18,3 +18,4 @@ static-ffmpeg
 timm
 einops
 transformers==4.44.2
+ddgs

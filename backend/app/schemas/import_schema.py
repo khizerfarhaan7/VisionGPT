@@ -21,7 +21,7 @@ class ImportAnalyzeResponseSchema(BaseModel):
     success: bool
     message: str
     content_type: ContentTypeLiteral
-    status: str
+    status: Optional[str] = None
     # PDF metadata fields
     filename: Optional[str] = None
     page_count: Optional[int] = None
@@ -33,3 +33,5 @@ class ImportAnalyzeResponseSchema(BaseModel):
     duration: Optional[Union[int, float, str]] = None
     channel: Optional[str] = None
     audio_path: Optional[str] = None
+    transcript_length: Optional[int] = None
+    total_chunks: Optional[int] = None

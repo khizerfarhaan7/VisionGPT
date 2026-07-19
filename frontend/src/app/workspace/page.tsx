@@ -16,7 +16,8 @@ import {
   Copy,
   Download,
   Search,
-  Globe
+  Globe,
+  ExternalLink
 } from "lucide-react";
 
 interface SelectedFile {
@@ -2903,6 +2904,80 @@ export default function WorkspacePage() {
                     </button>
                   );
                 })}
+              </div>
+            </div>
+
+            {/* Search Results Section */}
+            <div className="pt-6 border-t border-slate-100 dark:border-zinc-800/60 space-y-4 w-full text-left">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-bold tracking-wider text-slate-400 dark:text-zinc-500 uppercase">
+                  Search Results
+                </h3>
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-zinc-800 text-slate-500 dark:text-zinc-400">
+                  3 Results Found
+                </span>
+              </div>
+
+              <div className="space-y-3.5">
+                {[
+                  {
+                    id: 1,
+                    title: "Machine Learning Fundamentals",
+                    type: "PDF",
+                    url: "https://example.com/ml.pdf",
+                    badgeColor: "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20"
+                  },
+                  {
+                    id: 2,
+                    title: "CNN Lecture for Beginners",
+                    type: "YouTube",
+                    url: "https://youtube.com/example",
+                    badgeColor: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20"
+                  },
+                  {
+                    id: 3,
+                    title: "Operating Systems Audio Notes",
+                    type: "Audio",
+                    url: "https://example.com/os-audio.mp3",
+                    badgeColor: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20"
+                  }
+                ].map((result) => (
+                  <div
+                    key={result.id}
+                    className="p-5 rounded-2xl border border-slate-200/80 dark:border-zinc-800/80 bg-white/90 dark:bg-zinc-900/40 shadow-sm hover:shadow-md hover:border-slate-300 dark:hover:border-zinc-700 transition-all duration-200 flex flex-col md:flex-row md:items-center justify-between gap-4"
+                  >
+                    <div className="space-y-1.5 min-w-0 flex-1">
+                      <div className="flex items-center gap-2.5 flex-wrap">
+                        <h4 className="text-sm font-bold text-slate-800 dark:text-zinc-100 truncate">
+                          {result.title}
+                        </h4>
+                        <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${result.badgeColor}`}>
+                          {result.type}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-400 dark:text-zinc-500 font-mono truncate">
+                        {result.url}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2.5 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-slate-100 dark:border-zinc-800/50">
+                      <button
+                        type="button"
+                        className="px-3.5 py-2 rounded-xl text-xs font-semibold border border-slate-200 dark:border-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-600 dark:text-zinc-300 transition-all cursor-pointer flex items-center gap-1.5"
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" />
+                        <span>Open Link</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm transition-all cursor-pointer flex items-center gap-1.5 border-0"
+                      >
+                        <Sparkles className="h-3.5 w-3.5" />
+                        <span>Import & Analyze</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           </div>

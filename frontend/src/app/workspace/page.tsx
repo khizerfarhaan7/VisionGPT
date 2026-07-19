@@ -84,6 +84,7 @@ interface PDFChatMessage {
 
 export default function WorkspacePage() {
   const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<"upload" | "search">("upload");
+  const [webSearchQuery, setWebSearchQuery] = useState("");
   const [isDragActive, setIsDragActive] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<SelectedFile[]>([]);
   const [recentUploads, setRecentUploads] = useState<RecentUpload[]>([]);
@@ -2797,17 +2798,60 @@ export default function WorkspacePage() {
         <motion.div
           initial={{ opacity: 0, y: 15 }}
           animate={{ opacity: 1, y: 0 }}
-          className="border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 rounded-3xl p-16 flex flex-col items-center justify-center text-center min-h-[450px] shadow-sm w-full"
+          className="border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 rounded-3xl p-8 md:p-16 flex flex-col items-center justify-center text-center min-h-[450px] shadow-sm w-full space-y-8"
         >
-          <div className="space-y-6 flex flex-col items-center max-w-md">
+          <div className="space-y-3 flex flex-col items-center max-w-2xl">
             <div className="h-16 w-16 rounded-2xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center border border-indigo-500/20 shadow-sm">
               <Globe className="h-8 w-8 text-indigo-500" />
             </div>
             <div className="space-y-2">
-              <h2 className="text-xl font-extrabold tracking-tight">Search from Web</h2>
+              <h2 className="text-2xl font-extrabold tracking-tight">Search from Web</h2>
               <p className="text-sm text-slate-500 dark:text-zinc-400 leading-relaxed">
-                Search online resources and import them into VisionGPT for analysis.
+                Search online resources and import them into VisionGPT for AI-powered analysis.
               </p>
+            </div>
+          </div>
+
+          {/* Search Box Container */}
+          <div className="w-full max-w-2xl space-y-4">
+            <div className="flex gap-2 items-center bg-slate-50 dark:bg-zinc-950 p-2 rounded-2xl border border-slate-200/80 dark:border-zinc-800/80 focus-within:ring-2 focus-within:ring-indigo-500/25 focus-within:border-indigo-500 transition-all shadow-inner">
+              <div className="pl-3 text-slate-400">
+                <Search className="h-5 w-5" />
+              </div>
+              <input
+                type="text"
+                value={webSearchQuery}
+                onChange={(e) => setWebSearchQuery(e.target.value)}
+                placeholder="Search for any topic..."
+                className="flex-1 px-2 py-3 bg-transparent text-sm focus:outline-none text-slate-800 dark:text-zinc-200 placeholder-slate-450 dark:placeholder-zinc-550"
+              />
+              <button
+                type="button"
+                className="px-6 py-3 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 text-white font-semibold text-xs shadow-md shadow-indigo-500/20 hover:shadow-lg transition-all active:scale-95 cursor-pointer flex items-center gap-1.5 border-0"
+              >
+                <span>Search</span>
+                <ArrowRight className="h-3.5 w-3.5" />
+              </button>
+            </div>
+
+            {/* Example Queries */}
+            <div className="flex flex-wrap items-center justify-center gap-2.5 pt-2 text-xs">
+              <span className="text-slate-400 dark:text-zinc-500">Try searching:</span>
+              {[
+                "Machine Learning",
+                "Operating Systems Notes",
+                "React Tutorial",
+                "CNN Lecture"
+              ].map((query) => (
+                <button
+                  key={query}
+                  type="button"
+                  onClick={() => setWebSearchQuery(query)}
+                  className="px-3 py-1.5 rounded-full border border-slate-200 dark:border-zinc-800 bg-white hover:bg-slate-50 dark:bg-zinc-900 dark:hover:bg-zinc-800 text-slate-600 dark:text-zinc-350 cursor-pointer transition-all hover:border-indigo-500/30 hover:scale-[1.02]"
+                >
+                  {query}
+                </button>
+              ))}
             </div>
           </div>
         </motion.div>

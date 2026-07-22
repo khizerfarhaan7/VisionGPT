@@ -50,6 +50,12 @@ async def upload_image(file: UploadFile = File(...)):
         except Exception:
             file_size = 0
             
+    if file_size == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The uploaded image file is empty (0 bytes) and cannot be processed."
+        )
+
     if file_size > MAX_FILE_SIZE:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -71,7 +77,7 @@ async def upload_image(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to persist uploaded image file: {str(e)}"
+            detail="Failed to save uploaded image file. Please try again."
         )
         
     # 7. Construct response parameters
@@ -118,6 +124,12 @@ async def upload_pdf(file: UploadFile = File(...)):
         except Exception:
             file_size = 0
             
+    if file_size == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The uploaded PDF document is empty (0 bytes) and cannot be processed."
+        )
+
     if file_size > PDF_MAX_FILE_SIZE:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -139,7 +151,7 @@ async def upload_pdf(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to persist uploaded PDF file: {str(e)}"
+            detail="Failed to save uploaded PDF file. Please try again."
         )
         
     # 6. Extract page count metadata using PyMuPDF (fitz)
@@ -147,12 +159,12 @@ async def upload_pdf(file: UploadFile = File(...)):
         doc = fitz.open(str(destination_path))
         page_count = doc.page_count
         doc.close()
-    except Exception as e:
+    except Exception:
         if destination_path.exists():
             destination_path.unlink()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid or corrupted PDF document: {str(e)}"
+            detail="The uploaded PDF file is invalid or corrupted. Please choose a valid PDF file."
         )
         
     # 7. Construct response parameters
@@ -197,6 +209,12 @@ async def upload_audio(file: UploadFile = File(...)):
         except Exception:
             file_size = 0
             
+    if file_size == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The uploaded audio file is empty (0 bytes) and cannot be processed."
+        )
+
     if file_size > AUDIO_MAX_FILE_SIZE:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -218,7 +236,7 @@ async def upload_audio(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to persist uploaded audio file: {str(e)}"
+            detail="Failed to save uploaded audio file. Please try again."
         )
         
     # 6. Construct response parameters

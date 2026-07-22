@@ -68,6 +68,8 @@ class RetrieverService:
         index_path = vector_store_dir / "faiss.index"
         metadata_path = vector_store_dir / "metadata.json"
 
+        logger.info(f"[Retrieval] Initiating search in vector store '{vector_store_id}' (Top-{top_k})")
+
         if not index_path.exists():
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -92,6 +94,7 @@ class RetrieverService:
             )
 
         if index.ntotal == 0 or not metadata:
+            logger.info(f"[Retrieval] Vector store '{vector_store_id}' contains no vectors or metadata")
             return []
 
         # 2. Embed user question using cached embedding model
@@ -139,4 +142,5 @@ class RetrieverService:
                 "metadata": extra_meta
             })
 
+        logger.info(f"[Retrieval] Successfully retrieved {len(retrieved_chunks)} chunks from vector store '{vector_store_id}'")
         return retrieved_chunks

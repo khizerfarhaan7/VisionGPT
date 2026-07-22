@@ -88,7 +88,7 @@ class RAGService:
                     logger.error(f"Gemini API returned status code {response.status_code}: {err_detail}")
                     raise HTTPException(
                         status_code=status.HTTP_502_BAD_GATEWAY,
-                        detail=f"Gemini API generation failed: {err_detail}"
+                        detail="Gemini AI service encountered an error while generating the response. Please try again."
                     )
 
                 data = response.json()
@@ -96,7 +96,7 @@ class RAGService:
                 if not candidates:
                     raise HTTPException(
                         status_code=status.HTTP_502_BAD_GATEWAY,
-                        detail="Gemini API returned no response candidates."
+                        detail="Gemini AI service is currently unavailable. Please try again."
                     )
 
                 answer_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
@@ -105,7 +105,7 @@ class RAGService:
             logger.error(f"Failed to communicate with Gemini API: {e}")
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to communicate with Gemini API service: {str(e)}"
+                detail="Unable to connect to Gemini AI service. Please check your network connection and try again."
             )
         except HTTPException:
             raise
@@ -113,7 +113,7 @@ class RAGService:
             logger.error(f"Unexpected error calling Gemini API: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"An unexpected error occurred during answer generation: {str(e)}"
+                detail="Something went wrong while generating your answer. Please try again."
             )
 
         # 5. Format sources list (preview max 100 chars, chunk_id, score)

@@ -2,9 +2,13 @@ export interface ImportAnalyzeResponse {
   success: boolean;
   message: string;
   content_type: string;
-  status: string;
+  status?: string;
   filename?: string;
-  page_count?: number;
+  title?: string;
+  channel?: string;
+  duration?: number;
+  transcript_length?: number;
+  total_chunks?: number;
   total_vectors?: number;
   index_location?: string;
   metadata_location?: string;
@@ -29,7 +33,7 @@ export async function importAnalyzeResource(
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
-    const errorMessage = errorData.detail || "Unable to import PDF. Please try again.";
+    const errorMessage = errorData.detail || `Unable to import ${contentType.toUpperCase()}. Please try again.`;
     throw new Error(errorMessage);
   }
 

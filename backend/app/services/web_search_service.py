@@ -28,6 +28,8 @@ class WebSearchService:
         try:
             ddgs = DDGS()
             search_results = list(ddgs.text(refined_query, max_results=5))
+            if not search_results and refined_query != query:
+                search_results = list(ddgs.text(query, max_results=5))
 
             for item in search_results:
                 title = item.get("title", "").strip() or "Untitled Result"

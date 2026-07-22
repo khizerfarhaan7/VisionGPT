@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from "react";
-import { importAnalyzeResource } from "@/services/importApi";
+import { importAnalyzeResource, ImportAnalyzeResponse } from "@/services/importApi";
+import { queryRAGChat, ChatSource } from "@/services/chatApi";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   UploadCloud,
@@ -18,7 +19,9 @@ import {
   Download,
   Search,
   Globe,
-  ExternalLink
+  ExternalLink,
+  MessageSquare,
+  BookOpen
 } from "lucide-react";
 
 interface SelectedFile {
@@ -84,8 +87,35 @@ interface PDFChatMessage {
   }[];
 }
 
+interface ImportedItem {
+  vector_store_id: string;
+  title: string;
+  content_type: string;
+  index_location?: string;
+  metadata_location?: string;
+  total_vectors?: number;
+  total_chunks?: number;
+}
+
+interface RAGChatMessage {
+  role: "user" | "assistant";
+  content: string;
+  sources?: ChatSource[];
+  isError?: boolean;
+  timestamp?: string;
+}
+
 export default function WorkspacePage() {
-  const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<"upload" | "search">("upload");
+  const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<"upload" | "search" | "chat">("upload");
+  const [importedItems, setImportedItems] = useState<ImportedItem[]>([]);
+  const [selectedVectorStoreId, setSelectedVectorStoreId] = useState<string | null>(null);
+  const [importDataResults, setImportDataResults] = useState<Record<string, ImportAnalyzeResponse>>({});
+
+  const [ragChatMessages, setRagChatMessages] = useState<RAGChatMessage[]>([]);
+  const [ragChatInput, setRagChatInput] = useState("");
+  const [ragChatLoading, setRagChatLoading] = useState(false);
+  const ragChatScrollRef = useRef<HTMLDivElement>(null);
+
   const [webSearchQuery, setWebSearchQuery] = useState("");
   const [selectedContentType, setSelectedContentType] = useState<"pdf" | "youtube" | "audio">("pdf");
   const [searchResults, setSearchResults] = useState<Array<{ title: string; url: string; type: string }>>([
@@ -113,9 +143,31 @@ export default function WorkspacePage() {
   const [importStatuses, setImportStatuses] = useState<Record<string, "idle" | "importing" | "imported" | "failed">>({});
   const [importErrorMessages, setImportErrorMessages] = useState<Record<string, string>>({});
 
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("tab") === "chat" || window.location.hash === "#chat") {
+        setActiveWorkspaceTab("chat");
+      }
+    }
+  }, []);
+
+  const extractVectorStoreId = (indexLocation?: string, filename?: string): string | null => {
+    if (indexLocation) {
+      const parts = indexLocation.split("/");
+      if (parts.length >= 2) {
+        return parts[parts.length - 2];
+      }
+    }
+    if (filename) {
+      return filename.replace(/\.[^/.]+$/, "");
+    }
+    return null;
+  };
+
   const handleImportAnalyze = async (resultUrl: string, resultType: string) => {
-    const normalizedType = resultType.toLowerCase();
-    if (normalizedType !== "pdf") {
+    const normalizedType = resultType.toLowerCase() as "pdf" | "youtube" | "audio";
+    if (!["pdf", "youtube", "audio"].includes(normalizedType)) {
       return;
     }
 
@@ -127,18 +179,39 @@ export default function WorkspacePage() {
     setImportErrorMessages((prev) => ({ ...prev, [resultUrl]: "" }));
 
     try {
-      const data = await importAnalyzeResource(resultUrl, "pdf");
+      const data = await importAnalyzeResource(resultUrl, normalizedType);
       if (data.success) {
         setImportStatuses((prev) => ({ ...prev, [resultUrl]: "imported" }));
+        setImportDataResults((prev) => ({ ...prev, [resultUrl]: data }));
+
+        const vsId = extractVectorStoreId(data.index_location, data.filename);
+        if (vsId) {
+          const newItem: ImportedItem = {
+            vector_store_id: vsId,
+            title: data.title || data.filename || resultUrl,
+            content_type: data.content_type || normalizedType,
+            index_location: data.index_location,
+            metadata_location: data.metadata_location,
+            total_vectors: data.total_vectors,
+            total_chunks: data.total_chunks
+          };
+          setImportedItems((prev) => {
+            const exists = prev.some((item) => item.vector_store_id === vsId);
+            if (exists) return prev;
+            return [...prev, newItem];
+          });
+          setSelectedVectorStoreId(vsId);
+          showToast(`Imported "${newItem.title}" successfully.`);
+        }
       } else {
         setImportStatuses((prev) => ({ ...prev, [resultUrl]: "failed" }));
         setImportErrorMessages((prev) => ({
           ...prev,
-          [resultUrl]: data.message || "Unable to import PDF. Please try again."
+          [resultUrl]: data.message || "Unable to import resource. Please try again."
         }));
       }
     } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : "Unable to import PDF. Please try again.";
+      const errMsg = err instanceof Error ? err.message : "Unable to import resource. Please try again.";
       setImportStatuses((prev) => ({ ...prev, [resultUrl]: "failed" }));
       setImportErrorMessages((prev) => ({
         ...prev,
@@ -629,6 +702,23 @@ export default function WorkspacePage() {
           ...prev,
           [activeFileId]: data.chunks || []
         }));
+        // Register Audio source in RAG importedItems dropdown selector
+        const vsId = savedName.replace(/\.[^/.]+$/, "");
+        const targetFile = selectedFiles.find((f) => f.id === activeFileId);
+        const newItem: ImportedItem = {
+          vector_store_id: vsId,
+          title: targetFile?.name || savedName,
+          content_type: "audio",
+          index_location: `uploads/vector_store/audio/${vsId}/faiss.index`,
+          metadata_location: `uploads/vector_store/audio/${vsId}/metadata.json`
+        };
+        setImportedItems((prev) => {
+          const exists = prev.some((item) => item.vector_store_id === vsId);
+          if (exists) return prev;
+          return [...prev, newItem];
+        });
+        setSelectedVectorStoreId(vsId);
+
         // Initialize chat history for this audio file
         setAudioChatHistories((prev) => ({
           ...prev,
@@ -736,6 +826,24 @@ export default function WorkspacePage() {
           }
         }));
 
+        // Register PDF source in RAG importedItems dropdown selector
+        const vsId = extractVectorStoreId(data.index_location, savedName) || savedName.replace(/\.[^/.]+$/, "");
+        const targetFile = selectedFiles.find((f) => f.id === activeFileId);
+        const newItem: ImportedItem = {
+          vector_store_id: vsId,
+          title: targetFile?.name || savedName,
+          content_type: "pdf",
+          index_location: data.index_location,
+          metadata_location: data.metadata_location,
+          total_vectors: data.total_vectors
+        };
+        setImportedItems((prev) => {
+          const exists = prev.some((item) => item.vector_store_id === vsId);
+          if (exists) return prev;
+          return [...prev, newItem];
+        });
+        setSelectedVectorStoreId(vsId);
+
         // Auto-switch to chat tab and initialize welcome message
         setActivePdfTab("chat");
         setPdfChatHistories((prev) => ({
@@ -751,6 +859,138 @@ export default function WorkspacePage() {
       alert("Error contacting the indexing service.");
     } finally {
       setIndexLoading(false);
+    }
+  };
+
+  // Sync all transcribed Audio and indexed PDF files into importedItems
+  useEffect(() => {
+    Object.keys(transcribeResults).forEach((fileId) => {
+      const file = selectedFiles.find((f) => f.id === fileId);
+      if (file && file.savedName) {
+        const vsId = file.savedName.replace(/\.[^/.]+$/, "");
+        const title = file.name || file.savedName;
+        setImportedItems((prev) => {
+          if (prev.some((item) => item.vector_store_id === vsId)) return prev;
+          return [
+            ...prev,
+            {
+              vector_store_id: vsId,
+              title: title,
+              content_type: "audio",
+              index_location: `uploads/vector_store/audio/${vsId}/faiss.index`,
+              metadata_location: `uploads/vector_store/audio/${vsId}/metadata.json`
+            }
+          ];
+        });
+        setSelectedVectorStoreId((curr) => curr || vsId);
+      }
+    });
+
+    Object.keys(indexResults).forEach((fileId) => {
+      const file = selectedFiles.find((f) => f.id === fileId);
+      const res = indexResults[fileId];
+      if (file && res && res.index_location) {
+        const vsId = extractVectorStoreId(res.index_location, file.savedName) || (file.savedName ? file.savedName.replace(/\.[^/.]+$/, "") : null);
+        if (vsId) {
+          const title = file.name || file.savedName || vsId;
+          setImportedItems((prev) => {
+            if (prev.some((item) => item.vector_store_id === vsId)) return prev;
+            return [
+              ...prev,
+              {
+                vector_store_id: vsId,
+                title: title,
+                content_type: "pdf",
+                index_location: res.index_location,
+                metadata_location: res.metadata_location,
+                total_vectors: res.total_vectors
+              }
+            ];
+          });
+          setSelectedVectorStoreId((curr) => curr || vsId);
+        }
+      }
+    });
+
+    Object.keys(videoIndexResults).forEach((fileId) => {
+      const file = selectedFiles.find((f) => f.id === fileId);
+      const res = videoIndexResults[fileId];
+      if (file && res && res.index_location) {
+        const vsId = extractVectorStoreId(res.index_location, file.savedName) || (file.savedName ? file.savedName.replace(/\.[^/.]+$/, "") : null);
+        if (vsId) {
+          const title = file.name || file.savedName || vsId;
+          setImportedItems((prev) => {
+            if (prev.some((item) => item.vector_store_id === vsId)) return prev;
+            return [
+              ...prev,
+              {
+                vector_store_id: vsId,
+                title: title,
+                content_type: "video",
+                index_location: res.index_location,
+                metadata_location: res.metadata_location,
+                total_vectors: res.total_chunks,
+                total_chunks: res.total_chunks
+              }
+            ];
+          });
+          setSelectedVectorStoreId((curr) => curr || vsId);
+        }
+      }
+    });
+  }, [transcribeResults, indexResults, videoIndexResults, selectedFiles]);
+
+  useEffect(() => {
+    if (ragChatScrollRef.current) {
+      ragChatScrollRef.current.scrollTop = ragChatScrollRef.current.scrollHeight;
+    }
+  }, [ragChatMessages, ragChatLoading, activeWorkspaceTab]);
+
+  const handleSendRagMessage = async () => {
+    if (!selectedVectorStoreId) {
+      showToast("Please select or import a knowledge base first.");
+      return;
+    }
+    if (!ragChatInput.trim() || ragChatLoading) return;
+
+    const userQuestion = ragChatInput.trim();
+    setRagChatInput("");
+
+    const timeNow = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const userMsg: RAGChatMessage = { role: "user", content: userQuestion, timestamp: timeNow };
+    setRagChatMessages((prev) => [...prev, userMsg]);
+    setRagChatLoading(true);
+
+    try {
+      const res = await queryRAGChat(selectedVectorStoreId, userQuestion);
+      if (res.success) {
+        const assistantMsg: RAGChatMessage = {
+          role: "assistant",
+          content: res.answer,
+          sources: res.sources,
+          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+        };
+        setRagChatMessages((prev) => [...prev, assistantMsg]);
+      } else {
+        const errorMsg: RAGChatMessage = {
+          role: "assistant",
+          content: "Sorry, I was unable to retrieve an answer from the knowledge base.",
+          isError: true,
+          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+        };
+        setRagChatMessages((prev) => [...prev, errorMsg]);
+      }
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : "Unable to query RAG assistant. Please check backend status.";
+      const errorMsg: RAGChatMessage = {
+        role: "assistant",
+        content: `Error: ${errorMessage}`,
+        isError: true,
+        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      };
+      setRagChatMessages((prev) => [...prev, errorMsg]);
+    } finally {
+      setRagChatLoading(false);
     }
   };
 
@@ -1163,6 +1403,17 @@ export default function WorkspacePage() {
         >
           <Globe className="h-4 w-4" />
           <span>Search from Web</span>
+        </button>
+        <button
+          onClick={() => setActiveWorkspaceTab("chat")}
+          className={`pb-3 text-sm font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
+            activeWorkspaceTab === "chat"
+              ? "border-violet-500 text-violet-650 dark:text-violet-400 dark:border-violet-400 font-bold"
+              : "border-transparent text-slate-400 dark:text-zinc-500 hover:text-slate-600 dark:hover:text-zinc-300"
+          }`}
+        >
+          <MessageSquare className="h-4 w-4" />
+          <span>AI Chat</span>
         </button>
       </div>
 
@@ -2896,9 +3147,9 @@ export default function WorkspacePage() {
             )}
           </motion.div>
         </div>
-
-        </div>
-      )) : (
+      </div>
+    )
+  ) : activeWorkspaceTab === "search" ? (
         <motion.div
           initial={{ opacity: 0, y: 15 }}
           animate={{ opacity: 1, y: 0 }}
@@ -3094,37 +3345,52 @@ export default function WorkspacePage() {
                               <span>Open Link</span>
                             </button>
 
-                            {result.type.toLowerCase() === "pdf" ? (
+                             <button
+                              type="button"
+                              disabled={status === "importing" || status === "imported"}
+                              onClick={() => handleImportAnalyze(result.url, result.type)}
+                              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border-0 ${
+                                status === "imported"
+                                  ? "bg-emerald-600 text-white cursor-default opacity-90"
+                                  : status === "importing"
+                                  ? "bg-indigo-600/70 text-white cursor-wait opacity-80"
+                                  : status === "failed"
+                                  ? "bg-amber-600 hover:bg-amber-700 text-white shadow-sm cursor-pointer active:scale-95"
+                                  : "bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm cursor-pointer active:scale-95"
+                              }`}
+                            >
+                              {status === "importing" ? (
+                                <span>Importing...</span>
+                              ) : status === "imported" ? (
+                                <span>Imported ✓</span>
+                              ) : status === "failed" ? (
+                                <>
+                                  <Sparkles className="h-3.5 w-3.5" />
+                                  <span>Retry Import</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Sparkles className="h-3.5 w-3.5" />
+                                  <span>Import & Analyze</span>
+                                </>
+                              )}
+                            </button>
+
+                            {status === "imported" && (
                               <button
                                 type="button"
-                                disabled={status === "importing" || status === "imported"}
-                                onClick={() => handleImportAnalyze(result.url, result.type)}
-                                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border-0 ${
-                                  status === "imported"
-                                    ? "bg-emerald-600 text-white cursor-default opacity-90"
-                                    : status === "importing"
-                                    ? "bg-indigo-600/70 text-white cursor-wait opacity-80"
-                                    : "bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm cursor-pointer active:scale-95"
-                                }`}
+                                onClick={() => {
+                                  const resData = importDataResults[result.url];
+                                  const vsId = extractVectorStoreId(resData?.index_location, resData?.filename);
+                                  if (vsId) {
+                                    setSelectedVectorStoreId(vsId);
+                                  }
+                                  setActiveWorkspaceTab("chat");
+                                }}
+                                className="px-3.5 py-2 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold shadow-sm transition-all flex items-center gap-1.5 border-0 cursor-pointer"
                               >
-                                {status === "importing" ? (
-                                  <span>Importing...</span>
-                                ) : status === "imported" ? (
-                                  <span>Imported ✓</span>
-                                ) : (
-                                  <>
-                                    <Sparkles className="h-3.5 w-3.5" />
-                                    <span>Import & Analyze</span>
-                                  </>
-                                )}
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                className="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm transition-all cursor-pointer flex items-center gap-1.5 border-0"
-                              >
-                                <Sparkles className="h-3.5 w-3.5" />
-                                <span>Import & Analyze</span>
+                                <MessageSquare className="h-3.5 w-3.5" />
+                                <span>Open AI Chat</span>
                               </button>
                             )}
                           </div>
@@ -3147,6 +3413,218 @@ export default function WorkspacePage() {
               )}
             </div>
           </div>
+        </motion.div>
+      ) : (
+        /* AI CHAT VIEW */
+        <motion.div
+          initial={{ opacity: 0, y: 15 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="border border-slate-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/20 rounded-3xl p-6 md:p-8 shadow-sm w-full space-y-6 flex flex-col min-h-[600px]"
+        >
+          {/* Header & Knowledge Base Selector Bar */}
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-2xl bg-slate-50/80 dark:bg-zinc-900/80 border border-slate-200/80 dark:border-zinc-800">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500/10 text-violet-600 dark:text-violet-400 border border-violet-500/20">
+                <MessageSquare className="h-5 w-5" />
+              </div>
+              <div>
+                <h2 className="font-bold text-sm text-slate-900 dark:text-zinc-100">
+                  RAG AI Assistant
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-zinc-400">
+                  Ask grounded questions about imported PDFs, YouTube videos, or Audio recordings
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <label className="text-xs font-semibold text-slate-600 dark:text-zinc-400 whitespace-nowrap">
+                Selected Source:
+              </label>
+              <select
+                value={selectedVectorStoreId || ""}
+                onChange={(e) => setSelectedVectorStoreId(e.target.value)}
+                className="w-full sm:w-64 px-3 py-2 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-xs font-semibold text-slate-800 dark:text-zinc-200 outline-none focus:ring-2 focus:ring-violet-500/20 cursor-pointer"
+              >
+                {importedItems.length === 0 && (
+                  <option value="">No imported knowledge bases</option>
+                )}
+                {importedItems.map((item) => (
+                  <option key={item.vector_store_id} value={item.vector_store_id}>
+                    {item.title} ({item.content_type.toUpperCase()})
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Chat Stream Messages Box */}
+          <div
+            ref={ragChatScrollRef}
+            className="flex-1 overflow-y-auto p-4 md:p-6 rounded-2xl bg-slate-50/50 dark:bg-zinc-950/40 border border-slate-200/80 dark:border-zinc-800 space-y-4 max-h-[500px] min-h-[350px] scroll-smooth"
+          >
+            {ragChatMessages.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-full text-center space-y-4 py-12">
+                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-tr from-violet-500/15 to-indigo-500/15 text-violet-600 dark:text-violet-400 border border-violet-500/20 shadow-md">
+                  <Sparkles className="h-8 w-8 animate-pulse" />
+                </div>
+                <div className="space-y-1.5 max-w-md">
+                  <h3 className="font-extrabold text-slate-850 dark:text-zinc-150 text-base tracking-tight">
+                    Ask VisionGPT Assistant
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-zinc-400 leading-relaxed">
+                    Select an imported PDF, YouTube video, or Audio recording above and ask any natural language question to receive grounded answers with citations.
+                  </p>
+                </div>
+
+                {/* Suggestion Chips */}
+                <div className="flex flex-wrap items-center justify-center gap-2 pt-2 max-w-lg">
+                  {[
+                    "Summarize key points",
+                    "What are the main takeaways?",
+                    "Explain the core topics",
+                    "List important details"
+                  ].map((suggestion) => (
+                    <button
+                      key={suggestion}
+                      type="button"
+                      onClick={() => {
+                        setRagChatInput(suggestion);
+                      }}
+                      className="px-3 py-1.5 rounded-full text-[11px] font-semibold bg-violet-50 dark:bg-violet-950/40 text-violet-600 dark:text-violet-300 border border-violet-200/60 dark:border-violet-800/60 hover:bg-violet-100 dark:hover:bg-violet-900/60 transition-all cursor-pointer hover:scale-105 active:scale-95 shadow-2xs"
+                    >
+                      💡 {suggestion}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              ragChatMessages.map((msg, idx) => (
+                <div
+                  key={idx}
+                  className={`flex flex-col ${
+                    msg.role === "user" ? "items-end" : "items-start"
+                  }`}
+                >
+                  <div
+                    className={`max-w-[85%] sm:max-w-[78%] rounded-2xl px-4 py-3 text-xs leading-relaxed shadow-sm transition-all ${
+                      msg.role === "user"
+                        ? "bg-gradient-to-r from-violet-600 to-indigo-600 text-white rounded-br-none"
+                        : msg.isError
+                        ? "bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded-bl-none"
+                        : "bg-white dark:bg-zinc-900 text-slate-800 dark:text-zinc-100 rounded-bl-none border border-slate-200/80 dark:border-zinc-800"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-4 mb-1.5 pb-1 border-b border-white/10 dark:border-zinc-800/60">
+                      <span className={`text-[10px] font-extrabold uppercase tracking-wider ${
+                        msg.role === "user" ? "text-violet-100" : "text-violet-600 dark:text-violet-400"
+                      }`}>
+                        {msg.role === "user" ? "👤 You" : "🤖 VisionGPT"}
+                      </span>
+                      {msg.timestamp && (
+                        <span className={`text-[9px] font-semibold ${
+                          msg.role === "user" ? "text-violet-200/80" : "text-slate-400 dark:text-zinc-500"
+                        }`}>
+                          {msg.timestamp}
+                        </span>
+                      )}
+                    </div>
+                    <p className="whitespace-pre-wrap select-text">{msg.content}</p>
+
+                    {/* Sources Section */}
+                    {msg.sources && msg.sources.length > 0 && (
+                      <div className="mt-3.5 pt-3 border-t border-slate-200/60 dark:border-zinc-800 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-700 dark:text-zinc-300">
+                            <BookOpen className="h-3.5 w-3.5 text-violet-500" />
+                            <span>Retrieved Sources ({msg.sources.length})</span>
+                          </div>
+                          <span className="text-[9px] font-semibold text-slate-400 dark:text-zinc-500">FAISS Similarity Match</span>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {msg.sources.map((src, sIdx) => (
+                            <div
+                              key={sIdx}
+                              className="p-2.5 rounded-xl bg-slate-50/80 dark:bg-zinc-850/80 border border-slate-200/80 dark:border-zinc-700/80 text-[11px] space-y-1.5 hover:border-violet-500/30 transition-all"
+                            >
+                              <div className="flex items-center justify-between font-bold text-slate-700 dark:text-zinc-300">
+                                <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md bg-slate-200/70 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 font-mono">
+                                  Chunk #{src.chunk_id}
+                                </span>
+                                <span className="text-[10px] px-2 py-0.5 rounded-md bg-violet-500/10 dark:bg-violet-400/10 text-violet-600 dark:text-violet-300 font-mono font-bold">
+                                  Score: {typeof src.score === "number" ? (src.score < 1 ? `${(src.score * 100).toFixed(1)}%` : src.score.toFixed(2)) : src.score}
+                                </span>
+                              </div>
+                              <p className="italic text-slate-600 dark:text-zinc-300 text-[10px] line-clamp-3 leading-relaxed bg-white/60 dark:bg-zinc-900/60 p-2 rounded-lg border border-slate-100 dark:border-zinc-800 select-text">
+                                &quot;{src.preview}&quot;
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+
+            {/* Thinking / Loading Indicator */}
+            {ragChatLoading && (
+              <div className="flex justify-start animate-fade-in">
+                <div className="max-w-[80%] rounded-2xl rounded-bl-none px-4 py-3 bg-white dark:bg-zinc-900 text-slate-700 dark:text-zinc-200 border border-violet-200/60 dark:border-violet-900/40 text-xs shadow-md flex items-center gap-3">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-xl bg-violet-500/10 text-violet-600 dark:text-violet-400 shrink-0">
+                    <Sparkles className="h-4 w-4 animate-spin" />
+                  </div>
+                  <div className="space-y-0.5">
+                    <p className="font-bold text-[11px] text-violet-600 dark:text-violet-400">VisionGPT Assistant</p>
+                    <div className="flex items-center gap-2">
+                      <div className="flex gap-1">
+                        <span className="w-1.5 h-1.5 bg-violet-500 rounded-full animate-bounce" style={{ animationDelay: "0ms" }}></span>
+                        <span className="w-1.5 h-1.5 bg-violet-500 rounded-full animate-bounce" style={{ animationDelay: "150ms" }}></span>
+                        <span className="w-1.5 h-1.5 bg-violet-500 rounded-full animate-bounce" style={{ animationDelay: "300ms" }}></span>
+                      </div>
+                      <span className="text-[11px] text-slate-500 dark:text-zinc-400 font-medium">Searching knowledge base & generating answer...</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Input Box Bar */}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleSendRagMessage();
+            }}
+            className="flex items-center gap-2 p-2 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800 shadow-sm focus-within:ring-2 focus-within:ring-violet-500/20 focus-within:border-violet-500/40 transition-all"
+          >
+            <input
+              type="text"
+              placeholder={
+                selectedVectorStoreId
+                  ? "Type your question here (Press Enter to send)..."
+                  : "Please select or import a knowledge base first..."
+              }
+              value={ragChatInput}
+              onChange={(e) => setRagChatInput(e.target.value)}
+              disabled={ragChatLoading || !selectedVectorStoreId}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSendRagMessage();
+                }
+              }}
+              className="flex-1 bg-transparent px-3 py-2 text-xs text-slate-800 dark:text-zinc-100 placeholder:text-slate-400 outline-none disabled:opacity-50"
+            />
+            <button
+              type="submit"
+              disabled={ragChatLoading || !ragChatInput.trim() || !selectedVectorStoreId}
+              className="flex h-9 w-9 items-center justify-center rounded-xl bg-violet-600 hover:bg-violet-700 text-white font-medium disabled:opacity-40 disabled:hover:bg-violet-600 transition-all shadow-md shadow-violet-600/20 cursor-pointer border-0 active:scale-95"
+            >
+              <ArrowRight className="h-4 w-4" />
+            </button>
+          </form>
         </motion.div>
       )}
 

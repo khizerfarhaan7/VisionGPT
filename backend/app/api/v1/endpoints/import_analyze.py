@@ -1,7 +1,9 @@
+import logging
 from fastapi import APIRouter, HTTPException, status
 from app.schemas.import_schema import ImportAnalyzeRequestSchema, ImportAnalyzeResponseSchema
 from app.services.import_service import ImportService
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 ALLOWED_CONTENT_TYPES = {"pdf", "youtube", "audio"}
@@ -31,7 +33,16 @@ async def import_and_analyze(request: ImportAnalyzeRequestSchema):
             detail=f"Invalid content_type. Must be one of: {', '.join(ALLOWED_CONTENT_TYPES)}"
         )
 
-    return await ImportService.import_and_analyze(
-        url=url_str,
-        content_type=request.content_type
-    )
+    try:
+        return await ImportService.import_and_analyze(
+            url=url_str,
+            content_type=request.content_type
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Unexpected error in import_and_analyze for URL {url_str}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Something went wrong while importing the resource. Please check the URL and try again."
+        )

@@ -41,7 +41,7 @@ export default function SaaSLayout({ children }: { children: React.ReactNode }) 
   const menuItems = [
     { name: "Dashboard", href: "/", icon: LayoutDashboard },
     { name: "Workspace", href: "/workspace", icon: Upload },
-    { name: "AI Chat", href: "#", icon: MessageSquare },
+    { name: "AI Chat", href: "/workspace?tab=chat", icon: MessageSquare },
     { name: "History", href: "#", icon: History },
     { name: "Settings", href: "#", icon: Settings },
   ];

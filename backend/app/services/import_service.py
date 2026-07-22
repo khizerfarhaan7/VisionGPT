@@ -439,12 +439,254 @@ class ImportService:
 
     @staticmethod
     async def route_to_audio(url: str) -> ImportAnalyzeResponseSchema:
-        """Placeholder for Audio import pipeline."""
+        """
+        Audio import pipeline:
+        1. Downloads audio resource from URL (via httpx or yt-dlp).
+        2. Invokes reusable SpeechService to generate speech transcript.
+        3. Chunks transcript text/segments into indexing chunks.
+        4. Generates text embeddings and compiles local FAISS vector store.
+        5. Persists metadata.json and FAISS index.
+        6. Cleans up temporary audio files.
+        7. Returns Audio import response with vector store location & metadata.
+        """
+        audio_dir = Path(settings.UPLOAD_DIR) / "audio"
+        audio_dir.mkdir(parents=True, exist_ok=True)
+
+        audio_id = str(uuid.uuid4())
+        saved_audio_file = None
+        title = "Imported Audio"
+        duration = 0.0
+
+        def cleanup_temp_files():
+            nonlocal saved_audio_file
+            try:
+                if saved_audio_file and saved_audio_file.exists():
+                    saved_audio_file.unlink(missing_ok=True)
+                for file_path in audio_dir.glob(f"{audio_id}.*"):
+                    if file_path.exists():
+                        file_path.unlink(missing_ok=True)
+            except Exception as ce:
+                logger.warning(f"Failed to clean up temporary Audio files for {audio_id}: {ce}")
+
+        # 1. Download Audio File from URL
+        # First attempt: Direct download using httpx
+        try:
+            parsed_url = urlparse(url)
+            url_path = parsed_url.path or ""
+            url_filename = os.path.basename(url_path)
+            if url_filename:
+                title = os.path.splitext(url_filename)[0] or "Imported Audio"
+
+            dest_file = audio_dir / f"{audio_id}.mp3"
+            async with httpx.AsyncClient(timeout=DOWNLOAD_TIMEOUT, follow_redirects=True) as client:
+                response = await client.get(url)
+                if response.status_code == 200:
+                    content = response.content
+                    if len(content) > MAX_PDF_DOWNLOAD_SIZE:
+                        raise HTTPException(
+                            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                            detail="Downloaded audio size exceeds maximum limit of 50MB."
+                        )
+                    if len(content) > 0:
+                        with dest_file.open("wb") as f:
+                            f.write(content)
+                        saved_audio_file = dest_file
+        except HTTPException:
+            cleanup_temp_files()
+            raise
+        except Exception as httpx_err:
+            logger.info(f"httpx download for audio URL failed or non-direct audio, attempting yt-dlp fallback: {httpx_err}")
+
+        # Fallback attempt: Download audio using yt-dlp if httpx didn't produce a valid file
+        if not saved_audio_file or not saved_audio_file.exists() or saved_audio_file.stat().st_size == 0:
+            outtmpl = str(audio_dir / f"{audio_id}.%(ext)s")
+            ydl_opts = {
+                'format': 'bestaudio/best',
+                'outtmpl': outtmpl,
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }],
+                'quiet': True,
+                'no_warnings': True,
+                'nocheckcertificate': True,
+                'keepvideo': False,
+            }
+            try:
+                def run_yt_dlp():
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        return ydl.extract_info(url, download=True)
+
+                loop = asyncio.get_running_loop()
+                info_dict = await loop.run_in_executor(None, run_yt_dlp)
+                if info_dict:
+                    title = info_dict.get("title") or title
+                    duration = info_dict.get("duration") or 0.0
+
+                possible_files = list(audio_dir.glob(f"{audio_id}.*"))
+                for file_path in possible_files:
+                    if file_path.suffix.lower() in [".mp3", ".m4a", ".wav", ".ogg", ".opus", ".flac", ".aac"]:
+                        saved_audio_file = file_path
+                        break
+            except Exception as ytdlp_err:
+                logger.error(f"yt-dlp audio download error: {ytdlp_err}")
+
+        if not saved_audio_file or not saved_audio_file.exists() or saved_audio_file.stat().st_size == 0:
+            cleanup_temp_files()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Unable to download or process audio from the provided URL."
+            )
+
+        # 2. Call SpeechService to transcribe audio
+        try:
+            loop = asyncio.get_running_loop()
+            transcribe_result = await loop.run_in_executor(
+                None, speech_service.transcribe, str(saved_audio_file)
+            )
+
+            if not transcribe_result.get("success"):
+                cleanup_temp_files()
+                err_detail = transcribe_result.get("error") or "Speech transcription failed."
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Speech transcription error: {err_detail}"
+                )
+
+            transcript = transcribe_result.get("transcript", "").strip()
+            segments = transcribe_result.get("segments", [])
+
+            if not transcript:
+                cleanup_temp_files()
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="No speech content or transcript could be extracted from the audio file."
+                )
+
+        except HTTPException:
+            cleanup_temp_files()
+            raise
+        except Exception as e:
+            cleanup_temp_files()
+            logger.error(f"Speech transcription pipeline error for audio import: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to transcribe audio file."
+            )
+
+        # 3. Text Chunking, Embedding Generation & FAISS Indexing
+        try:
+            chunks = []
+            if segments:
+                chunk_index = 0
+                current_chunk_segments = []
+                current_word_count = 0
+                target_min_words = 120
+                target_max_words = 180
+
+                for seg in segments:
+                    text = seg.get("text", "").strip()
+                    if not text:
+                        continue
+                    words = text.split()
+                    word_count = len(words)
+                    if current_word_count >= target_min_words and (current_word_count + word_count > target_max_words):
+                        chunk_text = " ".join([s.get("text", "").strip() for s in current_chunk_segments])
+                        start_time = float(current_chunk_segments[0].get("start", 0))
+                        end_time = float(current_chunk_segments[-1].get("end", 0))
+                        chunks.append({
+                            "chunk_id": f"chunk_{chunk_index}",
+                            "page": "audio",
+                            "start_time": round(start_time, 2),
+                            "end_time": round(end_time, 2),
+                            "text": chunk_text
+                        })
+                        chunk_index += 1
+                        current_chunk_segments = []
+                        current_word_count = 0
+                    current_chunk_segments.append(seg)
+                    current_word_count += word_count
+
+                if current_chunk_segments:
+                    chunk_text = " ".join([s.get("text", "").strip() for s in current_chunk_segments])
+                    start_time = float(current_chunk_segments[0].get("start", 0))
+                    end_time = float(current_chunk_segments[-1].get("end", 0))
+                    chunks.append({
+                        "chunk_id": f"chunk_{chunk_index}",
+                        "page": "audio",
+                        "start_time": round(start_time, 2),
+                        "end_time": round(end_time, 2),
+                        "text": chunk_text
+                    })
+
+            if not chunks:
+                words = transcript.split()
+                chunk_size = 150
+                for i in range(0, len(words), chunk_size):
+                    chunk_words = words[i:i+chunk_size]
+                    chunks.append({
+                        "chunk_id": f"chunk_{len(chunks)}",
+                        "page": "audio",
+                        "text": " ".join(chunk_words)
+                    })
+
+            if not chunks:
+                cleanup_temp_files()
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Audio transcript contains no valid text to index."
+                )
+
+            # Embedding generation using get_embedding_model
+            model = get_embedding_model()
+            sentences = [c["text"] for c in chunks]
+            embeddings = model.encode(sentences, convert_to_numpy=True)
+
+            dimension = int(embeddings.shape[1])
+            total_vectors = int(embeddings.shape[0])
+
+            index = faiss.IndexFlatL2(dimension)
+            index.add(embeddings.astype("float32"))
+
+            vector_store_dir = Path(settings.UPLOAD_DIR) / "vector_store" / audio_id
+            vector_store_dir.mkdir(parents=True, exist_ok=True)
+
+            index_path = vector_store_dir / "faiss.index"
+            metadata_path = vector_store_dir / "metadata.json"
+
+            faiss.write_index(index, str(index_path))
+
+            with open(metadata_path, "w", encoding="utf-8") as f:
+                json.dump(chunks, f, ensure_ascii=False, indent=2)
+
+        except HTTPException:
+            cleanup_temp_files()
+            raise
+        except Exception as e:
+            cleanup_temp_files()
+            logger.error(f"Audio indexing error: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to generate embeddings and build vector store for audio file."
+            )
+
+        # 4. Clean up temporary audio files
+        cleanup_temp_files()
+
+        # 5. Return success response with metadata
         return ImportAnalyzeResponseSchema(
             success=True,
-            message="Import pipeline initialized.",
+            message="Audio file imported and indexed successfully.",
             content_type="audio",
-            status="pending"
+            status="completed",
+            title=title,
+            duration=int(round(duration)) if duration else 0,
+            transcript_length=len(transcript),
+            total_chunks=len(chunks),
+            total_vectors=total_vectors,
+            index_location=f"uploads/vector_store/{audio_id}/faiss.index",
+            metadata_location=f"uploads/vector_store/{audio_id}/metadata.json"
         )
 
     @classmethod

@@ -1,11 +1,11 @@
 from pydantic import BaseModel, Field, field_validator
 from typing import List, Literal
 
-ContentTypeLiteral = Literal["pdf", "youtube", "audio"]
+ContentTypeLiteral = Literal["pdf", "youtube"]
 
 class WebSearchRequestSchema(BaseModel):
     query: str = Field(..., description="Search query string")
-    content_type: ContentTypeLiteral = Field(..., description="Content type filter: pdf, youtube, or audio")
+    content_type: ContentTypeLiteral = Field(..., description="Content type filter: pdf or youtube")
 
     @field_validator("query")
     @classmethod

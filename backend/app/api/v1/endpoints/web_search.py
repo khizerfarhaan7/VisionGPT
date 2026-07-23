@@ -4,7 +4,7 @@ from app.services.web_search_service import WebSearchService
 
 router = APIRouter()
 
-ALLOWED_CONTENT_TYPES = {"pdf", "youtube", "audio"}
+ALLOWED_CONTENT_TYPES = {"pdf", "youtube"}
 
 @router.post("", response_model=WebSearchResponseSchema)
 @router.post("/", response_model=WebSearchResponseSchema, include_in_schema=False)

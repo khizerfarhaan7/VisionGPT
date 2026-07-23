@@ -117,7 +117,7 @@ export default function WorkspacePage() {
   const ragChatScrollRef = useRef<HTMLDivElement>(null);
 
   const [webSearchQuery, setWebSearchQuery] = useState("");
-  const [selectedContentType, setSelectedContentType] = useState<"pdf" | "youtube" | "audio">("pdf");
+  const [selectedContentType, setSelectedContentType] = useState<"pdf" | "youtube">("pdf");
   const [searchResults, setSearchResults] = useState<Array<{ title: string; url: string; type: string }>>([
     {
       title: "Machine Learning Fundamentals",
@@ -128,11 +128,6 @@ export default function WorkspacePage() {
       title: "CNN Lecture for Beginners",
       type: "youtube",
       url: "https://youtube.com/example"
-    },
-    {
-      title: "Operating Systems Audio Notes",
-      type: "audio",
-      url: "https://example.com/os-audio.mp3"
     }
   ]);
   const [searchValidationError, setSearchValidationError] = useState<string | null>(null);
@@ -179,8 +174,8 @@ export default function WorkspacePage() {
     setImportErrorMessages((prev) => ({ ...prev, [resultUrl]: "" }));
 
     try {
-      const data = await importAnalyzeResource(resultUrl, normalizedType);
-      if (data.success) {
+      const data = await importAnalyzeResource(resultUrl, normalizedType as "pdf" | "youtube" | "audio");
+      if (data && data.success) {
         setImportStatuses((prev) => ({ ...prev, [resultUrl]: "imported" }));
         setImportDataResults((prev) => ({ ...prev, [resultUrl]: data }));
 
@@ -204,19 +199,18 @@ export default function WorkspacePage() {
           showToast(`Imported "${newItem.title}" successfully.`);
         }
       } else {
-        setImportStatuses((prev) => ({ ...prev, [resultUrl]: "failed" }));
-        setImportErrorMessages((prev) => ({
-          ...prev,
-          [resultUrl]: data.message || "Unable to import resource. Please try again."
-        }));
+        const errorDetail = data?.message || "Unable to import this resource. The content may be private, restricted, unavailable, or temporarily inaccessible.";
+        setImportStatuses((prev) => ({ ...prev, [resultUrl]: "idle" }));
+        setImportErrorMessages((prev) => ({ ...prev, [resultUrl]: errorDetail }));
+        showToast(errorDetail);
       }
     } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : "Unable to import resource. Please try again.";
-      setImportStatuses((prev) => ({ ...prev, [resultUrl]: "failed" }));
-      setImportErrorMessages((prev) => ({
-        ...prev,
-        [resultUrl]: errMsg
-      }));
+      const errMsg = (err instanceof Error && err.message)
+        ? err.message
+        : "Unable to import this resource. The content may be private, restricted, unavailable, or temporarily inaccessible.";
+      setImportStatuses((prev) => ({ ...prev, [resultUrl]: "idle" }));
+      setImportErrorMessages((prev) => ({ ...prev, [resultUrl]: errMsg }));
+      showToast(errMsg);
     }
   };
 
@@ -3241,7 +3235,7 @@ export default function WorkspacePage() {
               <h3 className="text-xs font-bold tracking-wider text-slate-400 dark:text-zinc-500 uppercase">
                 Content Type
               </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 {[
                   {
                     id: "pdf",
@@ -3254,12 +3248,6 @@ export default function WorkspacePage() {
                     icon: "▶️",
                     title: "YouTube",
                     description: "Search YouTube videos and educational lectures."
-                  },
-                  {
-                    id: "audio",
-                    icon: "🎵",
-                    title: "Audio",
-                    description: "Search podcasts, audio lectures and recordings."
                   }
                 ].map((type) => {
                   const isSelected = selectedContentType === type.id;
@@ -3267,7 +3255,7 @@ export default function WorkspacePage() {
                     <button
                       key={type.id}
                       type="button"
-                      onClick={() => setSelectedContentType(type.id as "pdf" | "youtube" | "audio")}
+                      onClick={() => setSelectedContentType(type.id as "pdf" | "youtube")}
                       className={`p-4 rounded-2xl text-left transition-all duration-200 cursor-pointer relative overflow-hidden flex flex-col justify-between space-y-2 border ${
                         isSelected
                           ? "border-indigo-500 dark:border-indigo-400 bg-indigo-500/10 dark:bg-indigo-500/15 shadow-lg shadow-indigo-500/10 ring-1 ring-indigo-500/20 scale-[1.01]"

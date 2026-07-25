@@ -1,14 +1,30 @@
+import os
+from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from app.core.config import settings
 from app.api.v1.api import api_router
 
+def init_upload_directories() -> Path:
+    """
+    Ensure the upload directory and required subdirectories exist.
+    """
+    base_upload = Path(settings.UPLOAD_DIR).resolve()
+    base_upload.mkdir(parents=True, exist_ok=True)
+    for subfolder in ["images", "pdfs", "audio", "vector_store", "temp"]:
+        (base_upload / subfolder).mkdir(parents=True, exist_ok=True)
+    return base_upload
+
+# Initialize upload storage directories synchronously before mounting StaticFiles
+uploads_dir = init_upload_directories()
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup tasks (if any) can be placed here
+    # Ensure upload directories remain initialized
+    init_upload_directories()
     yield
-    # Shutdown tasks (if any) can be placed here
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -31,12 +47,8 @@ if settings.BACKEND_CORS_ORIGINS:
 # Include API endpoints under API version prefix
 app.include_router(api_router, prefix=settings.API_V1_STR)
 
-from fastapi.staticfiles import StaticFiles
-import os
-
 # Mount uploads folder to serve static files (images, audio, etc.)
-uploads_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "uploads")
-app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
+app.mount("/uploads", StaticFiles(directory=str(uploads_dir)), name="uploads")
 
 @app.get("/")
 def read_root():

@@ -1,12 +1,14 @@
 import os
 import base64
 import json
+import logging
 import httpx
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, status
 from app.core.config import settings
 from app.schemas.analysis import ImageAnalysisRequestSchema, ImageAnalysisResponseSchema
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 @router.post("/image", response_model=ImageAnalysisResponseSchema, status_code=status.HTTP_200_OK)
@@ -15,17 +17,14 @@ async def analyze_image(payload: ImageAnalysisRequestSchema):
     Perform conversational visual reasoning on an uploaded image with a user query and history.
     Uses Google Gemini Vision API via direct HTTP request.
     """
-    # Print incoming request payload
-    print(f"[DIAGNOSTIC] Incoming request payload: {payload.model_dump() if hasattr(payload, 'model_dump') else payload.__dict__}")
+    logger.debug(f"Incoming request payload: {payload.model_dump() if hasattr(payload, 'model_dump') else payload.__dict__}")
 
     # 1. Verify file exists in uploads/images directory
     filename = payload.filename
     safe_filename = os.path.basename(filename)
     image_path = Path(settings.UPLOAD_DIR) / "images" / safe_filename
     
-    # Print resolved image path and whether it exists
-    print(f"[DIAGNOSTIC] Resolved image path: {image_path}")
-    print(f"[DIAGNOSTIC] Whether the image exists: {image_path.exists()}")
+    logger.debug(f"Resolved image path: {image_path}, exists: {image_path.exists()}")
 
     if not image_path.exists():
         raise HTTPException(
@@ -36,7 +35,7 @@ async def analyze_image(payload: ImageAnalysisRequestSchema):
     # 2. Check API Key configuration
     api_key = settings.GEMINI_API_KEY
     has_api_key = bool(api_key and api_key != "your_gemini_api_key_here")
-    print(f"[DIAGNOSTIC] Whether GEMINI_API_KEY is loaded: {has_api_key}")
+    logger.debug(f"Whether GEMINI_API_KEY is loaded: {has_api_key}")
 
     if not api_key or api_key == "your_gemini_api_key_here":
         raise HTTPException(
@@ -133,10 +132,8 @@ async def analyze_image(payload: ImageAnalysisRequestSchema):
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(gemini_url, json=gemini_payload)
             
-            # Print full Gemini HTTP response status
-            print(f"[DIAGNOSTIC] Full Gemini HTTP response status: {response.status_code}")
-            # Print full Gemini response body before any parsing
-            print(f"[DIAGNOSTIC] Full Gemini response body: {response.text}")
+            logger.debug(f"Gemini HTTP response status: {response.status_code}")
+            logger.debug(f"Gemini response body: {response.text}")
             
             if response.status_code != 200:
                 err_detail = response.text

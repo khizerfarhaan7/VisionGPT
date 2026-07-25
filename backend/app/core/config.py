@@ -6,16 +6,27 @@ from typing_extensions import Annotated
 
 
 def parse_cors_origins(v: Union[str, List[str]]) -> List[str]:
-    if isinstance(v, str) and not v.startswith("["):
-        return [i.strip() for i in v.split(",")]
-    elif isinstance(v, (list, str)):
-        return v
-    raise ValueError(v)
+    if isinstance(v, str):
+        v = v.strip()
+        if not v:
+            return []
+        if v.startswith("[") and v.endswith("]"):
+            import json
+            try:
+                parsed = json.loads(v)
+                if isinstance(parsed, list):
+                    return [str(item).strip() for item in parsed if str(item).strip()]
+            except Exception:
+                pass
+        return [i.strip() for i in v.split(",") if i.strip()]
+    elif isinstance(v, list):
+        return [str(item).strip() for item in v if str(item).strip()]
+    return []
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", case_sensitive=True, extra="ignore"
+        env_file=(".env", "../.env"), env_file_encoding="utf-8", case_sensitive=True, extra="ignore"
     )
 
     PROJECT_NAME: str = "VisionGPT"
@@ -48,8 +59,8 @@ class Settings(BaseSettings):
 
     # CORS
     BACKEND_CORS_ORIGINS: Annotated[
-        List[str], BeforeValidator(parse_cors_origins)
-    ] = ["http://localhost:3000"]
+        Union[List[str], str], BeforeValidator(parse_cors_origins)
+    ] = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
     # Storage
     UPLOAD_DIR: str = "uploads"
@@ -67,8 +78,4 @@ class Settings(BaseSettings):
     WHISPER_COMPUTE_TYPE: str = "int8"
 
 
-
-
 settings = Settings()
-print("Loaded Gemini Key:", settings.GEMINI_API_KEY)
-print(settings.OLLAMA_MODEL)

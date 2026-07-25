@@ -14,7 +14,10 @@ class SpeechService:
     Responsible ONLY for audio file transcription.
     """
 
-    SUPPORTED_FORMATS = {".mp3", ".wav", ".m4a", ".aac", ".flac"}
+    SUPPORTED_FORMATS = {
+        ".mp3", ".wav", ".m4a", ".aac", ".flac",
+        ".ogg", ".mp4", ".mov", ".avi", ".mkv", ".webm", ".opus"
+    }
 
     def __init__(
         self,

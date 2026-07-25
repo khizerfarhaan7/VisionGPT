@@ -1,10 +1,12 @@
 import os
 import uuid
 import shutil
+import fitz
 from pathlib import Path
 from fastapi import APIRouter, File, UploadFile, HTTPException, status
 from app.core.config import settings
 from app.schemas.upload import ImageUploadResponseSchema
+from app.schemas.pdf import PDFUploadResponseSchema
 from app.schemas.audio import AudioUploadResponseSchema
 
 router = APIRouter()
@@ -74,7 +76,9 @@ async def upload_image(file: UploadFile = File(...)):
     try:
         with destination_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-    except Exception as e:
+    except Exception:
+        if destination_path.exists():
+            destination_path.unlink()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to save uploaded image file. Please try again."
@@ -91,9 +95,6 @@ async def upload_image(file: UploadFile = File(...)):
         "size": file_size,
         "path": relative_path
     }
-
-import fitz
-from app.schemas.pdf import PDFUploadResponseSchema
 
 PDF_MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 
@@ -148,20 +149,34 @@ async def upload_pdf(file: UploadFile = File(...)):
     try:
         with destination_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-    except Exception as e:
+    except Exception:
+        if destination_path.exists():
+            destination_path.unlink()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to save uploaded PDF file. Please try again."
         )
         
     # 6. Extract page count metadata using PyMuPDF (fitz)
+    doc = None
     try:
         doc = fitz.open(str(destination_path))
         page_count = doc.page_count
         doc.close()
     except Exception:
+        if doc is not None:
+            try:
+                doc.close()
+            except Exception:
+                pass
+        doc = None
+        import gc
+        gc.collect()
         if destination_path.exists():
-            destination_path.unlink()
+            try:
+                destination_path.unlink()
+            except Exception:
+                pass
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="The uploaded PDF file is invalid or corrupted. Please choose a valid PDF file."
@@ -186,7 +201,7 @@ ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".mp4", ".mov", ".av
 async def upload_audio(file: UploadFile = File(...)):
     """
     Upload an audio file to the server.
-    Validates format (.mp3, .wav, .m4a) and file size (max 50MB).
+    Validates format (.mp3, .wav, .m4a, etc.) and file size (max 50MB).
     Saves the audio file under uploads/audio/ using unique UUID name.
     """
     # 1. Validate file extension
@@ -233,7 +248,9 @@ async def upload_audio(file: UploadFile = File(...)):
     try:
         with destination_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-    except Exception as e:
+    except Exception:
+        if destination_path.exists():
+            destination_path.unlink()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to save uploaded audio file. Please try again."

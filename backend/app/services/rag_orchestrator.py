@@ -130,22 +130,27 @@ class RagOrchestrator:
 
         elapsed = round(time.time() - start_time, 3)
         sources = local_result.get("sources", [])
-        
-        # Build normalized citation list
-        citations = []
-        for s in sources:
-            citations.append({
-                "source_type": s.get("page", "document"),
-                "locator": str(s.get("page", s.get("chunk_id", "unknown"))),
-                "score": s.get("score", 0.0),
-                "text_snippet": s.get("text", s.get("preview", ""))[:150]
-            })
+
+        # Build structured, verifiable citations via EvidenceCitationService
+        from app.services.evidence_citation_service import EvidenceCitationService
+        citations = EvidenceCitationService.build_citations(sources)
+
+        sources_used = [
+            {
+                "document_id": c.get("document_id"),
+                "filename": c.get("filename"),
+                "source_type": c.get("source_type")
+            }
+            for c in citations
+        ]
 
         return {
             "success": local_result.get("success", True),
             "answer": local_result.get("answer", ""),
-            "sources": sources,
             "citations": citations,
+            "evidence_count": len(citations),
+            "sources_used": sources_used,
+            "sources": sources,
             "retrieval_metadata": {
                 "provider": "local_ollama",
                 "model": settings.OLLAMA_MODEL,
@@ -181,26 +186,34 @@ class RagOrchestrator:
         elapsed = round(time.time() - start_time, 3)
         raw_sources = cloud_result.get("sources", [])
 
-        sources = []
-        citations = []
-        for s in raw_sources:
-            sources.append({
-                "chunk_id": s.get("chunk_id"),
-                "score": s.get("score"),
-                "preview": s.get("preview")
-            })
-            citations.append({
+        from app.services.evidence_citation_service import EvidenceCitationService
+        citations = EvidenceCitationService.build_citations([
+            {
+                "document_id": vector_store_id,
+                "filename": f"vector_store_{vector_store_id}",
                 "source_type": "vector_chunk",
-                "locator": str(s.get("chunk_id", "unknown")),
-                "score": s.get("score", 0.0),
-                "text_snippet": s.get("preview", "")
-            })
+                "locator": str(s.get("chunk_id", "chunk")),
+                "content": s.get("preview", ""),
+                "relevance_score": s.get("score", 0.0)
+            }
+            for s in raw_sources
+        ])
+
+        sources_used = [
+            {
+                "document_id": vector_store_id,
+                "filename": f"vector_store_{vector_store_id}",
+                "source_type": "vector_chunk"
+            }
+        ] if raw_sources else []
 
         return {
             "success": cloud_result.get("success", True),
             "answer": cloud_result.get("answer", ""),
-            "sources": sources,
             "citations": citations,
+            "evidence_count": len(citations),
+            "sources_used": sources_used,
+            "sources": raw_sources,
             "retrieval_metadata": {
                 "provider": "cloud_gemini",
                 "model": settings.GEMINI_MODEL,

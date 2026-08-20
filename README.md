@@ -239,9 +239,37 @@ VisionGPT supports environment-driven model profiles so you can switch between 4
 VISIONGPT_PROFILE=high_quality
 ```
 
+```
+
 ---
 
-### Step 4: Local Model Preparation (Ollama)
+### Step 4: Docker Compose Deployment (Recommended)
+
+To deploy VisionGPT locally using Docker Compose with PostgreSQL database persistence and health monitoring:
+
+```bash
+# Build and launch PostgreSQL, FastAPI Backend, and Next.js Frontend containers
+docker compose up --build -d
+```
+
+* **Frontend UI**: `http://localhost:3000`
+* **Backend REST API**: `http://localhost:8000` (Swagger docs at `http://localhost:8000/docs`)
+* **Liveness Probe**: `http://localhost:8000/api/v1/health/live`
+* **Readiness Probe**: `http://localhost:8000/api/v1/health/ready`
+
+*To inspect container logs:*
+```bash
+docker compose logs -f
+```
+
+*To stop container services without losing PostgreSQL data or uploaded files:*
+```bash
+docker compose down
+```
+
+---
+
+### Step 5: Local Model Preparation (Ollama)
 Ensure Ollama is running, then pull the model matching your active profile:
 ```bash
 # For local profile (Default)

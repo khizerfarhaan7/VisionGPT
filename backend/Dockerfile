@@ -40,8 +40,9 @@ RUN pip install --no-cache-dir -U pip \
 # Copy application source
 COPY . .
 
-# Create uploads directory and configure a non-root system user for security
+# Create uploads directory, make entrypoint executable, and configure a non-root user
 RUN mkdir -p /app/uploads && \
+    chmod +x /app/entrypoint.sh && \
     useradd -u 8888 -U -d /app -s /bin/bash appuser && \
     chown -R appuser:appuser /app
 
@@ -49,7 +50,8 @@ USER appuser
 
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:8000/api/v1/health || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+  CMD curl -f http://localhost:8000/api/v1/health/live || exit 1
 
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]

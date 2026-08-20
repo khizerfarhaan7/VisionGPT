@@ -50,13 +50,33 @@ class RagOrchestrator:
             vector_store_id=vector_store_id
         )
 
-        logger.info(
-            f"RagOrchestrator: Dispatching query (mode='{requested_mode}' -> resolved='{resolved_provider}') "
-            f"for question: '{question[:50]}...'"
+        # Query classification via QueryRouterService
+        from app.services.query_router_service import QueryRouterService
+        routing_info = QueryRouterService.classify_query(
+            question=question,
+            session_id=session_id,
+            vector_store_dir=vector_store_dir,
+            vector_store_id=vector_store_id
         )
 
+        logger.info(
+            f"RagOrchestrator: Query classified as '{routing_info['query_type']}' "
+            f"(Pipeline='{routing_info['selected_pipeline']}', Mode='{requested_mode}' -> Resolved='{resolved_provider}')"
+        )
+
+        # Dispatch based on router classification if session_id is provided and query is workspace/comparison
+        if session_id and routing_info["query_type"] in ("workspace", "comparison"):
+            from app.services.workspace_intelligence_service import WorkspaceIntelligenceService
+            res = await WorkspaceIntelligenceService.query_workspace(
+                session_id=session_id,
+                question=question,
+                mode=resolved_provider
+            )
+            res["routing_metadata"] = routing_info
+            return res
+
         if resolved_provider == "local":
-            return await cls._execute_local_flow(
+            res = await cls._execute_local_flow(
                 question=question,
                 vector_store_dir=vector_store_dir,
                 history=history or [],
@@ -66,13 +86,16 @@ class RagOrchestrator:
                 start_time=start_time
             )
         else:
-            return await cls._execute_cloud_flow(
+            res = await cls._execute_cloud_flow(
                 question=question,
                 vector_store_id=vector_store_id,
                 k=k,
                 session_id=session_id,
                 start_time=start_time
             )
+
+        res["routing_metadata"] = routing_info
+        return res
 
     @classmethod
     def _resolve_provider(

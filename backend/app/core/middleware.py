@@ -37,6 +37,15 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             # Inject X-Request-ID header into response
             response.headers["X-Request-ID"] = req_id
 
+            # Record HTTP request metrics
+            from app.services.metrics_service import MetricsService
+            MetricsService.record_request(
+                method=request.method,
+                path=request.url.path,
+                status_code=response.status_code,
+                duration_ms=duration_ms
+            )
+
             # Safe structured request logging (NO request bodies, NO secrets)
             logger.info(
                 f"HTTP {request.method} '{request.url.path}' -> {response.status_code} "

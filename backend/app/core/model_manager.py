@@ -41,6 +41,9 @@ class ModelManager:
         target_model = model_name or getattr(settings, "EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
 
         with self._lock:
+            from app.services.metrics_service import MetricsService
+            MetricsService.record_model_invocation(f"embedding:{target_model}")
+
             if model_key in self._models and self._models[model_key] is not None:
                 logger.info(f"ModelManager: Model '{model_key}' reused from cache.")
                 return self._models[model_key]

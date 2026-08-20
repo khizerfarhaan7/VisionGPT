@@ -1,8 +1,9 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import health, upload, analysis, pdf, audio, video, web_search, import_analyze, dev, chat, session, workspace_intelligence, job
+from app.api.v1.endpoints import health, upload, analysis, pdf, audio, video, web_search, import_analyze, dev, chat, session, workspace_intelligence, job, metrics
 
 api_router = APIRouter()
 api_router.include_router(health.router, prefix="/health", tags=["health"])
+api_router.include_router(metrics.router, prefix="/metrics", tags=["metrics"])
 api_router.include_router(session.router, prefix="/sessions", tags=["sessions"])
 api_router.include_router(job.router, prefix="/jobs", tags=["jobs"])
 api_router.include_router(workspace_intelligence.router, prefix="/workspace", tags=["workspace-intelligence"])

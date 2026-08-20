@@ -83,6 +83,9 @@ class Settings(BaseSettings):
     # Async Background Job Concurrency Limit (4GB RAM safe)
     MAX_CONCURRENT_JOBS: int = 1
 
+    # Metrics & Observability Configuration
+    METRICS_ENABLED: bool = True
+
     # API Keys
     GEMINI_API_KEY: str | None = None
     GEMINI_MODEL: str = "gemini-2.5-flash"

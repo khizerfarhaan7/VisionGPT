@@ -64,6 +64,15 @@ class RagOrchestrator:
             f"(Pipeline='{routing_info['selected_pipeline']}', Mode='{requested_mode}' -> Resolved='{resolved_provider}')"
         )
 
+        # Record RAG query metrics
+        from app.services.metrics_service import MetricsService
+        duration_ms = round((time.time() - start_time) * 1000, 2)
+        MetricsService.record_rag_query(
+            provider=resolved_provider,
+            query_type=routing_info.get("query_type", "single_source"),
+            duration_ms=duration_ms
+        )
+
         # Dispatch based on router classification if session_id is provided and query is workspace/comparison
         if session_id and routing_info["query_type"] in ("workspace", "comparison"):
             from app.services.workspace_intelligence_service import WorkspaceIntelligenceService

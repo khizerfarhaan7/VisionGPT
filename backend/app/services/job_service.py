@@ -246,6 +246,10 @@ class JobService:
                 await db.commit()
                 await db.refresh(job_rec)
                 logger.info(f"JobService: Completed job '{job_id}' in DB.")
+
+                from app.services.metrics_service import MetricsService
+                MetricsService.record_job_event(job_rec.job_type, "completed")
+
                 return cls._job_record_to_dict(job_rec)
         except Exception as e:
             logger.error(f"JobService: Failed completing job '{job_id}' in DB: {e}")

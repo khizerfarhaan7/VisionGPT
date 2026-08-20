@@ -80,6 +80,9 @@ class Settings(BaseSettings):
     # RAG Orchestration Settings ("local", "cloud", "auto")
     RAG_PROVIDER: str = "local"
 
+    # Async Background Job Concurrency Limit (4GB RAM safe)
+    MAX_CONCURRENT_JOBS: int = 1
+
     # API Keys
     GEMINI_API_KEY: str | None = None
     GEMINI_MODEL: str = "gemini-2.5-flash"

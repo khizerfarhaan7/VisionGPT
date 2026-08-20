@@ -17,7 +17,14 @@ class ModelManager:
     def __init__(self):
         self._lock = threading.Lock()
         self._models: Dict[str, Any] = {}
-        logger.info("ModelManager initialized in LAZY mode (no models loaded on startup).")
+        logger.info(
+            f"ModelManager initialized in LAZY mode (no models loaded on startup). "
+            f"Active Profile: '{getattr(settings, 'VISIONGPT_PROFILE', 'local').upper()}'. "
+            f"Configured models -> Embedding: '{getattr(settings, 'EMBEDDING_MODEL', 'BAAI/bge-small-en-v1.5')}', "
+            f"Whisper: '{getattr(settings, 'WHISPER_MODEL', 'small')}' ({getattr(settings, 'WHISPER_DEVICE', 'cpu')}/{getattr(settings, 'WHISPER_COMPUTE_TYPE', 'int8')}), "
+            f"Florence-2: '{getattr(settings, 'FLORENCE_MODEL_ID', 'microsoft/Florence-2-base')}', "
+            f"Ollama: '{getattr(settings, 'OLLAMA_MODEL', 'qwen2.5:3b')}'."
+        )
 
     def is_loaded(self, model_name: str) -> bool:
         """
@@ -26,25 +33,27 @@ class ModelManager:
         with self._lock:
             return model_name in self._models and self._models[model_name] is not None
 
-    def get_embedding_model(self) -> Any:
+    def get_embedding_model(self, model_name: Optional[str] = None) -> Any:
         """
-        Lazy-loads or returns cached SentenceTransformer embedding model ('BAAI/bge-small-en-v1.5').
+        Lazy-loads or returns cached SentenceTransformer embedding model.
         """
         model_key = "embedding"
+        target_model = model_name or getattr(settings, "EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
+
         with self._lock:
             if model_key in self._models and self._models[model_key] is not None:
                 logger.info(f"ModelManager: Model '{model_key}' reused from cache.")
                 return self._models[model_key]
 
-            logger.info(f"ModelManager: Model '{model_key}' requested. Loading 'BAAI/bge-small-en-v1.5'...")
+            logger.info(f"ModelManager: Model '{model_key}' requested. Loading '{target_model}'...")
             try:
                 from sentence_transformers import SentenceTransformer
-                model = SentenceTransformer("BAAI/bge-small-en-v1.5")
+                model = SentenceTransformer(target_model)
                 self._models[model_key] = model
-                logger.info(f"ModelManager: Model '{model_key}' loaded successfully.")
+                logger.info(f"ModelManager: Model '{model_key}' ({target_model}) loaded successfully.")
                 return model
             except Exception as e:
-                logger.error(f"ModelManager: Failed to load embedding model '{model_key}': {e}", exc_info=True)
+                logger.error(f"ModelManager: Failed to load embedding model '{target_model}': {e}", exc_info=True)
                 raise RuntimeError(f"Embedding model loading failed: {str(e)}") from e
 
     def get_whisper_model(
@@ -55,12 +64,21 @@ class ModelManager:
     ) -> Any:
         """
         Lazy-loads or returns the single managed Faster-Whisper model instance.
-        Eliminates duplicate Whisper model allocations across backend modules.
         """
         model_key = "whisper"
         target_size = model_size or getattr(settings, "WHISPER_MODEL", "small")
         target_device = device or getattr(settings, "WHISPER_DEVICE", "cpu")
         target_compute = compute_type or getattr(settings, "WHISPER_COMPUTE_TYPE", "int8")
+
+        # CUDA availability check & fallback
+        import torch
+        if target_device == "cuda" and not torch.cuda.is_available():
+            logger.warning(
+                f"ModelManager: WHISPER_DEVICE='cuda' was requested, but CUDA is not available on host. "
+                "Falling back to device='cpu' with compute_type='int8'."
+            )
+            target_device = "cpu"
+            target_compute = "int8"
 
         with self._lock:
             if model_key in self._models and self._models[model_key] is not None:
@@ -74,7 +92,6 @@ class ModelManager:
             try:
                 import faster_whisper
                 try:
-                    # Attempt primary initialization
                     model = faster_whisper.WhisperModel(
                         target_size,
                         device=target_device,
@@ -105,18 +122,20 @@ class ModelManager:
 
     def get_florence_model(
         self,
-        model_id: str = "microsoft/Florence-2-base"
+        model_id: Optional[str] = None
     ) -> Tuple[Any, Any]:
         """
         Lazy-loads or returns cached Microsoft Florence-2 processor and model pair.
         """
         model_key = "florence"
+        target_id = model_id or getattr(settings, "FLORENCE_MODEL_ID", "microsoft/Florence-2-base")
+
         with self._lock:
             if model_key in self._models and self._models[model_key] is not None:
                 logger.info(f"ModelManager: Model '{model_key}' reused from cache.")
                 return self._models[model_key]
 
-            logger.info(f"ModelManager: Model '{model_key}' requested. Initializing '{model_id}'...")
+            logger.info(f"ModelManager: Model '{model_key}' requested. Initializing '{target_id}'...")
             try:
                 import torch
                 import transformers.dynamic_module_utils
@@ -136,12 +155,20 @@ class ModelManager:
 
                 from transformers import AutoProcessor, AutoModelForCausalLM
 
-                device = "cuda" if torch.cuda.is_available() else "cpu"
-                torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+                requested_device = getattr(settings, "FLORENCE_DEVICE", "cpu")
+                if requested_device == "cuda" and not torch.cuda.is_available():
+                    logger.warning(
+                        "ModelManager: FLORENCE_DEVICE='cuda' requested, but PyTorch CUDA is unavailable. "
+                        "Falling back to device='cpu'."
+                    )
+                    requested_device = "cpu"
 
-                processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+                device = requested_device if (requested_device == "cuda" and torch.cuda.is_available()) else "cpu"
+                torch_dtype = torch.float16 if device == "cuda" else torch.float32
+
+                processor = AutoProcessor.from_pretrained(target_id, trust_remote_code=True)
                 model = AutoModelForCausalLM.from_pretrained(
-                    model_id,
+                    target_id,
                     torch_dtype=torch_dtype,
                     trust_remote_code=True
                 ).to(device)

@@ -127,9 +127,10 @@ class VideoService:
     def extract_frames(
         self,
         video_path: Union[str, Path],
-        interval_seconds: float = 3.0,
+        interval_seconds: Optional[float] = None,
         output_dir: Optional[Union[str, Path]] = None
     ) -> List[Dict[str, Any]]:
+        target_interval = interval_seconds if interval_seconds is not None else getattr(settings, "VIDEO_INTERVAL_SECONDS", 3.0)
         """
         Extracts frames at a given interval, saving them in a temporary folder.
         Optionally runs registered frame processors on each extracted frame.
@@ -146,7 +147,7 @@ class VideoService:
             output_path = Path(output_dir)
 
         output_path.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Extracting frames for {video_file.name} to {output_path} (every {interval_seconds}s)")
+        logger.info(f"Extracting frames for {video_file.name} to {output_path} (every {target_interval}s)")
 
         extracted_frames = []
 
@@ -200,7 +201,7 @@ class VideoService:
                         extracted_count += 1
                         
                         # Set next target extraction timestamp
-                        next_target_time = pts_seconds + interval_seconds
+                        next_target_time = pts_seconds + target_interval
                         
                     frame_count += 1
                     

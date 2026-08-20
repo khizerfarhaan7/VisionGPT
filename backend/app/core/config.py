@@ -1,5 +1,5 @@
 import os
-from typing import List, Union
+from typing import Any, List, Union
 from pydantic import BeforeValidator, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing_extensions import Annotated
@@ -74,17 +74,59 @@ class Settings(BaseSettings):
     # Storage
     UPLOAD_DIR: str = "uploads"
 
+    # Resource Profile ("local", "high_quality", "custom")
+    VISIONGPT_PROFILE: str = "local"
+
     # API Keys
     GEMINI_API_KEY: str | None = None
+    GEMINI_MODEL: str = "gemini-2.5-flash"
     
     # LLM Settings
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "qwen2.5:3b"
 
+    # Embedding Settings
+    EMBEDDING_MODEL: str = "BAAI/bge-small-en-v1.5"
+    EMBEDDING_DIMENSION: int = 384
+
     # Speech Recognition Settings
-    WHISPER_MODEL: str = "base"
+    WHISPER_MODEL: str = "small"
     WHISPER_DEVICE: str = "cpu"
     WHISPER_COMPUTE_TYPE: str = "int8"
+
+    # Vision Model Settings
+    FLORENCE_MODEL_ID: str = "microsoft/Florence-2-base"
+    FLORENCE_DEVICE: str = "cpu"
+
+    # Multimodal Video Settings
+    VIDEO_INTERVAL_SECONDS: float = 3.0
+    VIDEO_WINDOW_SIZE: float = 15.0
+
+    def model_post_init(self, __context: Any) -> None:
+        profile = self.VISIONGPT_PROFILE.lower().strip()
+        if profile not in ("local", "high_quality", "custom"):
+            raise ValueError(f"Invalid VISIONGPT_PROFILE '{self.VISIONGPT_PROFILE}'. Must be 'local', 'high_quality', or 'custom'.")
+
+        if profile == "high_quality":
+            # Apply high_quality defaults where defaults were kept
+            if self.OLLAMA_MODEL == "qwen2.5:3b":
+                self.OLLAMA_MODEL = "qwen2.5:14b"
+            if self.EMBEDDING_MODEL == "BAAI/bge-small-en-v1.5":
+                self.EMBEDDING_MODEL = "BAAI/bge-large-en-v1.5"
+                self.EMBEDDING_DIMENSION = 1024
+            if self.WHISPER_MODEL in ("small", "base"):
+                self.WHISPER_MODEL = "large-v3"
+                self.WHISPER_DEVICE = "cuda"
+                self.WHISPER_COMPUTE_TYPE = "float16"
+            if self.FLORENCE_MODEL_ID == "microsoft/Florence-2-base":
+                self.FLORENCE_MODEL_ID = "microsoft/Florence-2-large"
+                self.FLORENCE_DEVICE = "cuda"
+            if self.VIDEO_INTERVAL_SECONDS == 3.0:
+                self.VIDEO_INTERVAL_SECONDS = 1.0
+            if self.VIDEO_WINDOW_SIZE == 15.0:
+                self.VIDEO_WINDOW_SIZE = 5.0
+            if self.GEMINI_MODEL == "gemini-2.5-flash":
+                self.GEMINI_MODEL = "gemini-2.5-pro"
 
 
 settings = Settings()

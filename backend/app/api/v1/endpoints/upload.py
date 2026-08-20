@@ -87,6 +87,21 @@ async def upload_image(file: UploadFile = File(...)):
     # 7. Construct response parameters
     relative_path = f"uploads/images/{unique_filename}"
     
+    try:
+        from app.services.workspace_service import WorkspaceService
+        from app.core.database import SessionLocal
+        async with SessionLocal() as db:
+            await WorkspaceService.persist_document(
+                db=db,
+                filename=unique_filename,
+                original_source=original_filename,
+                media_type="image",
+                file_path=relative_path,
+                status="uploaded"
+            )
+    except Exception as db_err:
+        pass
+
     return {
         "success": True,
         "filename": unique_filename,
@@ -185,6 +200,21 @@ async def upload_pdf(file: UploadFile = File(...)):
     # 7. Construct response parameters
     relative_path = f"uploads/pdfs/{unique_filename}"
     
+    try:
+        from app.services.workspace_service import WorkspaceService
+        from app.core.database import SessionLocal
+        async with SessionLocal() as db:
+            await WorkspaceService.persist_document(
+                db=db,
+                filename=unique_filename,
+                original_source=original_filename,
+                media_type="pdf",
+                file_path=relative_path,
+                status="uploaded"
+            )
+    except Exception:
+        pass
+
     return {
         "success": True,
         "filename": unique_filename,
@@ -259,6 +289,21 @@ async def upload_audio(file: UploadFile = File(...)):
     # 6. Construct response parameters
     relative_path = f"uploads/audio/{unique_filename}"
     
+    try:
+        from app.services.workspace_service import WorkspaceService
+        from app.core.database import SessionLocal
+        async with SessionLocal() as db:
+            await WorkspaceService.persist_document(
+                db=db,
+                filename=unique_filename,
+                original_source=original_filename,
+                media_type="audio",
+                file_path=relative_path,
+                status="uploaded"
+            )
+    except Exception:
+        pass
+
     return {
         "success": True,
         "filename": unique_filename,

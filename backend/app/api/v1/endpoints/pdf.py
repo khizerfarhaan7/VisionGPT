@@ -300,6 +300,19 @@ async def index_pdf(payload: PDFIndexRequestSchema):
         with open(metadata_path, "w", encoding="utf-8") as f:
             json.dump(chunks, f, ensure_ascii=False, indent=2)
 
+        try:
+            from app.services.workspace_service import WorkspaceService
+            from app.core.database import SessionLocal
+            async with SessionLocal() as db:
+                await WorkspaceService.persist_vector_store(
+                    db=db,
+                    index_path=f"uploads/vector_store/{pdf_id}/faiss.index",
+                    embedding_model=model_name,
+                    chunk_count=len(chunks)
+                )
+        except Exception:
+            pass
+
         return {
             "success": True,
             "embedding_model": model_name,

@@ -5,6 +5,7 @@ import traceback
 from pathlib import Path
 import httpx
 import faiss
+from typing import Any, Optional, List, Dict
 from fastapi import HTTPException, status
 from sentence_transformers import SentenceTransformer
 
@@ -197,7 +198,7 @@ def compile_merged_group(group: list) -> dict:
         
     return merged_chunk
 
-async def execute_local_rag(vector_store_dir: Path, question: str, history: list, system_prompt: str, k: int = 3):
+async def execute_local_rag(vector_store_dir: Path, question: str, history: list, system_prompt: str, k: int = 3, session_id: Any = None):
     # 0. Rewrite the query if history exists to resolve pronouns and produce standalone query
     standalone_question = await rewrite_query(question, history)
 
@@ -229,6 +230,17 @@ async def execute_local_rag(vector_store_dir: Path, question: str, history: list
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate query embedding: {str(e)}"
+        )
+
+    # Validate vector index dimension compatibility
+    if hasattr(index, "d") and index.d != query_vector.shape[1]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Incompatible vector store index. The FAISS index dimension ({index.d}d) "
+                f"does not match active embedding model '{settings.EMBEDDING_MODEL}' ({query_vector.shape[1]}d). "
+                "Please re-index this document or set VISIONGPT_PROFILE=local."
+            )
         )
         
     # 3. Search FAISS index (increase retrieve depth to get potential consecutive chunks to merge)
@@ -349,7 +361,19 @@ async def execute_local_rag(vector_store_dir: Path, question: str, history: list
             res_data = response.json()
             logger.info(f"Ollama raw JSON response: {res_data}")
             answer = res_data.get("message", {}).get("content", "").strip()
-            
+
+            if session_id:
+                try:
+                    import uuid
+                    valid_sid = uuid.UUID(str(session_id)) if not isinstance(session_id, uuid.UUID) else session_id
+                    from app.services.workspace_service import WorkspaceService
+                    from app.core.database import SessionLocal
+                    async with SessionLocal() as db:
+                        await WorkspaceService.persist_chat_message(db, valid_sid, "user", question)
+                        await WorkspaceService.persist_chat_message(db, valid_sid, "assistant", answer, sources=sources)
+                except Exception as p_err:
+                    logger.warning(f"Failed to persist chat turn for session '{session_id}': {p_err}")
+
             return {
                 "success": True,
                 "answer": answer,

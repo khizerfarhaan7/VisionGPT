@@ -211,10 +211,35 @@ GEMINI_API_KEY=your_actual_gemini_api_key_here
 
 ---
 
-### Step 3: Local Model Preparation (Ollama)
-Ensure Ollama is running, then pull the default LLM model:
+### Step 3: Select AI Resource Profile
+
+VisionGPT supports environment-driven model profiles so you can switch between 4GB RAM local mode and High-Quality GPU server deployment mode seamlessly:
+
+| Setting | `VISIONGPT_PROFILE=local` (Default) | `VISIONGPT_PROFILE=high_quality` |
+|---|---|---|
+| **Target Hardware** | Consumer Laptops (4 GB RAM Limit) | GPU Workstations / Dedicated Cloud Servers |
+| **Local LLM** | `qwen2.5:3b` | `qwen2.5:14b` |
+| **Embeddings** | `BAAI/bge-small-en-v1.5` (384d) | `BAAI/bge-large-en-v1.5` (1024d) |
+| **Whisper STT** | `small` (int8, CPU) | `large-v3` (float16, CUDA) |
+| **Florence-2 Vision** | `microsoft/Florence-2-base` (CPU) | `microsoft/Florence-2-large` (CUDA) |
+| **Video Sampling** | 3.0s interval / 15.0s window | 1.0s interval / 5.0s window |
+| **Gemini Model** | `gemini-2.5-flash` | `gemini-2.5-pro` |
+
+*To enable High-Quality GPU mode in production:*
+```env
+VISIONGPT_PROFILE=high_quality
+```
+
+---
+
+### Step 4: Local Model Preparation (Ollama)
+Ensure Ollama is running, then pull the model matching your active profile:
 ```bash
+# For local profile (Default)
 ollama pull qwen2.5:3b
+
+# For high_quality profile
+# ollama pull qwen2.5:14b
 ```
 
 ---

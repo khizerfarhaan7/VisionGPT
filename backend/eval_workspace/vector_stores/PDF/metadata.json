@@ -1,0 +1,12 @@
+[
+  {
+    "chunk_id": "chunk_0",
+    "page": "1",
+    "text": "VisionGPT Multimodal System Technical Overview\n1. System Architecture\nVisionGPT is an enterprise multimodal retrieval-augmented generation framework. It integrates local language m\n2. Vision Processing Module\nThe vision module uses Microsoft Florence-2-base model to generate detailed image captions and video frame d\n3. Vector Indexing\nEmbeddings are computed using BAAI/bge-small-en-v1.5 producing 384-dimensional dense vectors stored in FA\n"
+  },
+  {
+    "chunk_id": "chunk_1",
+    "page": "2",
+    "text": "4. Speech Recognition Engine\nAudio transcription is performed by Faster-Whisper base model operating on CPU with int8 quantization. It gener\n5. Language Model Synthesis\nThe RAG synthesis phase is executed by local Ollama serving qwen2.5:3b with standalone query rewriting.\n"
+  }
+]

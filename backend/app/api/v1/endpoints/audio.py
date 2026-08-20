@@ -23,26 +23,17 @@ static_ffmpeg.add_paths()
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-_whisper_model = None
+from app.core.model_manager import model_manager
 
 def get_whisper_model():
-    global _whisper_model
-    if _whisper_model is None:
-        logger.info("Initializing faster-whisper 'small' model...")
-        try:
-            # Attempt loading with CUDA (float16) for GPU acceleration on RTX 3050
-            _whisper_model = faster_whisper.WhisperModel("small", device="cpu", compute_type="int8")
-            logger.info("faster-whisper loaded successfully on CPU.")
-        except Exception as cuda_err:
-            logger.warning(f"CUDA initialization failed, falling back to CPU: {cuda_err}")
-            try:
-                # Fallback to CPU with int8 quantization
-                _whisper_model = faster_whisper.WhisperModel("small", device="cpu", compute_type="int8")
-                logger.info("faster-whisper loaded successfully on CPU (int8).")
-            except Exception as cpu_err:
-                logger.critical(f"CPU initialization failed: {cpu_err}")
-                raise cpu_err
-    return _whisper_model
+    """
+    Retrieves the single managed Faster-Whisper model via ModelManager.
+    """
+    return model_manager.get_whisper_model(
+        model_size="small",
+        device=getattr(settings, "WHISPER_DEVICE", "cpu"),
+        compute_type=getattr(settings, "WHISPER_COMPUTE_TYPE", "int8")
+    )
 
 def chunk_whisper_segments(segments_list, target_min_words=120, target_max_words=180) -> list:
     """

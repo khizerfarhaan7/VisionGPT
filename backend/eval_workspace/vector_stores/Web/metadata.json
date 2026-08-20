@@ -1,0 +1,7 @@
+[
+  {
+    "chunk_id": "chunk_0",
+    "page": "web_1",
+    "text": "VisionGPT Web Benchmark VisionGPT Web Import Knowledge Base The web import pipeline downloads remote HTML or PDF documents, extracts clean readable text, and indexes semantic paragraphs into the FAISS vector database using BAAI/bge-small-en-v1.5 embeddings."
+  }
+]

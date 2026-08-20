@@ -70,15 +70,13 @@ async def rewrite_query(question: str, history: list) -> str:
         logger.error(f"Failed to rewrite query: {str(e)}, using original question.")
         return question
 
-_embedding_model = None
+from app.core.model_manager import model_manager
 
 def get_embedding_model():
-    global _embedding_model
-    if _embedding_model is None:
-        logger.info("Loading SentenceTransformer model 'BAAI/bge-small-en-v1.5'...")
-        _embedding_model = SentenceTransformer("BAAI/bge-small-en-v1.5")
-        logger.info("SentenceTransformer model loaded successfully.")
-    return _embedding_model
+    """
+    Retrieves the shared SentenceTransformer embedding model via ModelManager.
+    """
+    return model_manager.get_embedding_model()
 
 def exclude_embeddings(data):
     if isinstance(data, dict):

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Union
 from faster_whisper import WhisperModel
 from app.core.config import settings
+from app.core.model_manager import model_manager
 
 logger = logging.getLogger(__name__)
 
@@ -28,33 +29,13 @@ class SpeechService:
         self.model_size = model_size or getattr(settings, "WHISPER_MODEL", "base")
         self.device = device or getattr(settings, "WHISPER_DEVICE", "cpu")
         self.compute_type = compute_type or getattr(settings, "WHISPER_COMPUTE_TYPE", "int8")
-        self._model: Optional[WhisperModel] = None
 
-    def _get_model(self) -> WhisperModel:
-        if self._model is None:
-            logger.info(f"Loading Faster-Whisper model '{self.model_size}' on device '{self.device}'...")
-            try:
-                self._model = WhisperModel(
-                    self.model_size,
-                    device=self.device,
-                    compute_type=self.compute_type,
-                )
-            except Exception as e:
-                logger.error(f"Failed to load Faster-Whisper model: {e}")
-                if self.device != "cpu":
-                    logger.info("Attempting fallback to CPU for Faster-Whisper model...")
-                    try:
-                        self._model = WhisperModel(
-                            self.model_size,
-                            device="cpu",
-                            compute_type="int8",
-                        )
-                    except Exception as fallback_error:
-                        logger.error(f"CPU fallback failed: {fallback_error}")
-                        raise RuntimeError("Failed to load speech recognition model.") from fallback_error
-                else:
-                    raise RuntimeError("Failed to load speech recognition model.") from e
-        return self._model
+    def _get_model(self) -> Any:
+        return model_manager.get_whisper_model(
+            model_size=self.model_size,
+            device=self.device,
+            compute_type=self.compute_type
+        )
 
     def transcribe(self, audio_path: Union[str, Path]) -> Dict[str, Any]:
         """

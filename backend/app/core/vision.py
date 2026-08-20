@@ -29,12 +29,16 @@ class BaseVisionModel(ABC):
         pass
 
 
+from app.core.model_manager import model_manager
+
 class Florence2Model(BaseVisionModel):
     """
     Microsoft Florence-2-base vision model backend implementation.
+    Integrates with ModelManager for lazy loading and 4 GB RAM auto-release.
     """
-    def __init__(self, model_id: str = "microsoft/Florence-2-base"):
+    def __init__(self, model_id: str = "microsoft/Florence-2-base", auto_release: bool = True):
         self.model_id = model_id
+        self.auto_release = auto_release
         self.model = None
         self.processor = None
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -42,61 +46,19 @@ class Florence2Model(BaseVisionModel):
 
     def load_model(self) -> None:
         """
-        Lazy loads the Florence-2 processor and model once.
-        Automatically leverages CUDA (float16) on GPU, falling back to CPU (float32).
+        Lazy loads Florence-2 processor and model pair via ModelManager.
         """
-        if self.model is not None and self.processor is not None:
-            return  # Already loaded
-
-        logger.info(f"Initializing Florence-2 model backend on device: {self.device} ({self.torch_dtype})...")
-        try:
-            # Override check_imports to bypass flash_attn check on Windows/CPU environments
-            import transformers.dynamic_module_utils
-            orig_check_imports = transformers.dynamic_module_utils.check_imports
-
-            def patched_check_imports(filename, *args, **kwargs):
-                try:
-                    return orig_check_imports(filename, *args, **kwargs)
-                except ImportError as e:
-                    if "flash_attn" in str(e):
-                        return transformers.dynamic_module_utils.get_relative_imports(filename)
-                    raise e
-
-            transformers.dynamic_module_utils.check_imports = patched_check_imports
-
-            from transformers import AutoProcessor, AutoModelForCausalLM
-            
-            # Auto-detect CUDA capability if requested
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
-            self.torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-
-            # Load components using trust_remote_code due to custom model architecture script
-            self.processor = AutoProcessor.from_pretrained(
-                self.model_id, 
-                trust_remote_code=True
-            )
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_id,
-                torch_dtype=self.torch_dtype,
-                trust_remote_code=True
-            ).to(self.device)
-            
-            logger.info("Florence-2 model loaded successfully.")
-        except Exception as e:
-            logger.exception("Failed to load Florence-2 model components")
-            # Clear partially allocated memory to allow future retries
-            self.model = None
-            self.processor = None
-            raise RuntimeError(f"Florence-2 loading failed: {str(e)}") from e
+        self.processor, self.model = model_manager.get_florence_model(self.model_id)
+        if hasattr(self.model, "device"):
+            self.device = str(self.model.device)
 
     def describe_image(self, image: Image.Image) -> str:
         """
-        Executes image caption generation.
+        Executes image caption generation and auto-releases model memory if configured.
         """
         self.load_model()
         
         try:
-            # We use the detailed caption generation task for descriptive coverage
             prompt = "<MORE_DETAILED_CAPTION>"
             
             # Preprocess image
@@ -107,7 +69,7 @@ class Florence2Model(BaseVisionModel):
             if self.torch_dtype == torch.float16 and "pixel_values" in inputs:
                 inputs["pixel_values"] = inputs["pixel_values"].to(torch.float16)
                 
-            # Run causal causal generation
+            # Run causal generation
             with torch.no_grad():
                 generated_ids = self.model.generate(
                     input_ids=inputs["input_ids"],
@@ -128,6 +90,9 @@ class Florence2Model(BaseVisionModel):
         except Exception as e:
             logger.exception("Inference error during Florence-2 image description execution")
             raise RuntimeError(f"Florence-2 captioning failed: {str(e)}") from e
+        finally:
+            if self.auto_release:
+                model_manager.release_model("florence")
 
 
 class VisionService:

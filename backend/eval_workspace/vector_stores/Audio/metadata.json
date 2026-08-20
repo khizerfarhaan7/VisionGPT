@@ -1,0 +1,9 @@
+[
+  {
+    "chunk_id": "chunk_0",
+    "page": "audio_1",
+    "start_time": 0.0,
+    "end_time": 3.0,
+    "text": "Audio Transcript: VisionGPT speech recognition module uses Faster Whisper base model for accurate transcription."
+  }
+]

@@ -26,21 +26,22 @@ async def test_grounded_answer_generation():
 
     with patch("app.services.grounded_answer_service.GroundedAnswerService.generate_grounded_answer", new_callable=AsyncMock) as mock_gen:
         mock_gen.return_value = {
+            "success": True,
             "answer": "Revenue grew by 15% [cit_001].",
             "citations": citations,
-            "grounding_status": "grounded"
+            "insufficient_evidence": False
         }
         res = await GroundedAnswerService.generate_grounded_answer(
             question="How much did revenue grow?",
             evidence=evidence_chunks,
             citations=citations
         )
-        assert res["grounding_status"] == "grounded"
+        assert res["insufficient_evidence"] is False
         assert len(res["citations"]) == 1
 
 
 @pytest.mark.asyncio
 async def test_insufficient_evidence_response():
     resp = GroundedAnswerService._build_insufficient_evidence_response(session_id="test_sess", latency=0.01)
-    assert resp["grounding_status"] == "insufficient_evidence"
+    assert resp["insufficient_evidence"] is True
     assert "provided context does not contain" in resp["answer"].lower()

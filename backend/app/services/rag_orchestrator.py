@@ -211,3 +211,29 @@ class RagOrchestrator:
             "model_name": settings.GEMINI_MODEL,
             "session_id": str(session_id) if session_id else None
         }
+
+    @classmethod
+    async def retrieve_multimodal_evidence(
+        cls,
+        question: str,
+        session_id: Optional[Union[str, Any]] = None,
+        source_filters: Optional[List[str]] = None,
+        vector_store_dirs: Optional[List[Union[str, Path]]] = None,
+        top_k_per_source: int = 3,
+        top_k_total: int = 6
+    ) -> Dict[str, Any]:
+        """
+        Multimodal RAG Evidence Retrieval entry point.
+        Discovers session sources, queries vector stores sequentially, normalizes,
+        ranks, and deduplicates evidence chunks across PDF, Audio, Video, and Image modalities.
+        """
+        from app.services.multimodal_retriever_service import MultimodalRetrieverService
+
+        return await MultimodalRetrieverService.retrieve_evidence(
+            session_id=session_id,
+            question=question,
+            source_filters=source_filters,
+            vector_store_dirs=vector_store_dirs,
+            top_k_per_source=top_k_per_source,
+            top_k_total=top_k_total
+        )

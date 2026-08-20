@@ -88,6 +88,46 @@ def chunk_whisper_segments(segments_list, target_min_words=120, target_max_words
         
     return chunks
 
+@router.post("/transcribe_async", status_code=status.HTTP_202_ACCEPTED)
+async def transcribe_audio_async(payload: AudioTranscribeRequestSchema):
+    """
+    Submits audio speech transcription and FAISS vector indexing to the background JobService.
+    Returns HTTP 202 with job_id immediately for non-blocking execution.
+    """
+    from app.services.job_service import JobService
+    from app.services.job_worker_service import JobWorkerService
+
+    filename = payload.filename
+    safe_filename = os.path.basename(filename)
+    audio_id = os.path.splitext(safe_filename)[0]
+    audio_path = Path(settings.UPLOAD_DIR) / "audio" / safe_filename
+
+    if not audio_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="The requested audio file was not found in the uploads directory."
+        )
+
+    job = JobService.create_job(
+        job_type="audio_transcription",
+        document_id=audio_id,
+        metadata={"filename": safe_filename}
+    )
+
+    JobService.submit_job_task(
+        job["job_id"],
+        JobWorkerService.run_audio_transcription_task,
+        filename=safe_filename
+    )
+
+    return {
+        "job_id": job["job_id"],
+        "status": "queued",
+        "message": f"Audio transcription task for '{safe_filename}' submitted in background.",
+        "progress_url": f"/api/v1/jobs/{job['job_id']}"
+    }
+
+
 @router.post("/transcribe", response_model=AudioTranscribeResponseSchema, status_code=status.HTTP_200_OK)
 async def transcribe_audio(payload: AudioTranscribeRequestSchema):
     """

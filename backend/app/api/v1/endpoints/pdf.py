@@ -214,6 +214,46 @@ async def index_pdf(payload: PDFIndexRequestSchema):
             # If reading failed for some reason, proceed to regenerate
             pass
 
+
+@router.post("/index_async", status_code=status.HTTP_202_ACCEPTED)
+async def index_pdf_async(payload: PDFIndexRequestSchema):
+    """
+    Submits PDF text extraction and FAISS vector indexing to the background JobService.
+    Returns HTTP 202 with job_id immediately for real-time progress tracking.
+    """
+    from app.services.job_service import JobService
+    from app.services.job_worker_service import JobWorkerService
+
+    filename = payload.filename
+    safe_filename = os.path.basename(filename)
+    pdf_id = os.path.splitext(safe_filename)[0]
+    pdf_path = Path(settings.UPLOAD_DIR) / "pdfs" / safe_filename
+
+    if not pdf_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="The requested PDF document was not found."
+        )
+
+    job = JobService.create_job(
+        job_type="pdf_indexing",
+        document_id=pdf_id,
+        metadata={"filename": safe_filename}
+    )
+
+    JobService.submit_job_task(
+        job["job_id"],
+        JobWorkerService.run_pdf_indexing_task,
+        filename=safe_filename
+    )
+
+    return {
+        "job_id": job["job_id"],
+        "status": "queued",
+        "message": f"PDF indexing task for '{safe_filename}' submitted in background.",
+        "progress_url": f"/api/v1/jobs/{job['job_id']}"
+    }
+
     # Re-extract and chunk text to generate index
     try:
         doc = fitz.open(str(pdf_path))

@@ -13,6 +13,46 @@ from app.core.video import index_video_multimodal
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+@router.post("/index_async", status_code=status.HTTP_202_ACCEPTED)
+async def index_video_async(payload: VideoIndexRequestSchema):
+    """
+    Submits multimodal video frame extraction, visual captioning, speech STT,
+    and timeline indexing to the background JobService.
+    Returns HTTP 202 with job_id immediately for non-blocking execution.
+    """
+    from app.services.job_service import JobService
+    from app.services.job_worker_service import JobWorkerService
+
+    safe_filename = os.path.basename(payload.filename)
+    video_id = os.path.splitext(safe_filename)[0]
+    video_path = Path(settings.UPLOAD_DIR) / "audio" / safe_filename
+
+    if not video_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="The requested video file was not found in the uploads directory."
+        )
+
+    job = JobService.create_job(
+        job_type="video_processing",
+        document_id=video_id,
+        metadata={"filename": safe_filename}
+    )
+
+    JobService.submit_job_task(
+        job["job_id"],
+        JobWorkerService.run_video_indexing_task,
+        filename=safe_filename
+    )
+
+    return {
+        "job_id": job["job_id"],
+        "status": "queued",
+        "message": f"Video indexing task for '{safe_filename}' submitted in background.",
+        "progress_url": f"/api/v1/jobs/{job['job_id']}"
+    }
+
+
 @router.post("/index", status_code=status.HTTP_200_OK)
 async def index_video(payload: VideoIndexRequestSchema):
     """

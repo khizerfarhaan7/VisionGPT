@@ -1,0 +1,235 @@
+{
+  "dataset": "benchmark_v1.0",
+  "timestamp": "2026-08-20T20:46:02Z",
+  "total_cases": 7,
+  "overall_score": 0.87,
+  "retrieval_metrics": {
+    "recall_at_k": 1.0,
+    "precision_at_k": 0.31,
+    "mrr_at_k": 0.59
+  },
+  "citation_metrics": {
+    "citation_recall": 1.0,
+    "citation_precision": 1.0,
+    "citation_completeness": 1.0
+  },
+  "grounding_metrics": {
+    "groundedness_proxy_heuristic": 1.0,
+    "abstention_accuracy": 0.14
+  },
+  "latency_metrics": {
+    "mean_total_latency": 1.3
+  },
+  "per_case_results": [
+    {
+      "case_id": "case_1_pdf",
+      "case_name": "PDF Page Retrieval & Grounding",
+      "question": "What mechanism allows transformers to process tokens concurrently?",
+      "query_type": "single_source",
+      "retrieval_metrics": {
+        "recall_at_k": 1.0,
+        "precision_at_k": 0.2,
+        "mrr_at_k": 1.0
+      },
+      "citation_metrics": {
+        "citation_recall": 1.0,
+        "citation_precision": 1.0,
+        "citation_completeness": 1.0
+      },
+      "grounding_metrics": {
+        "groundedness_proxy_heuristic": 1.0,
+        "evidence_coverage": 1.0,
+        "abstention_accuracy": 0.0
+      },
+      "latency_metrics": {
+        "retrieval_latency": 9.008,
+        "generation_latency": 0.0,
+        "total_latency": 9.008
+      },
+      "answer_preview": "The provided context does not contain sufficient information to answer your question.",
+      "evidence_count": 5,
+      "citation_count": 5,
+      "insufficient_evidence": true
+    },
+    {
+      "case_id": "case_2_audio",
+      "case_name": "Audio Timestamp Retrieval",
+      "question": "What topic is discussed in the lecture audio recording?",
+      "query_type": "single_source",
+      "retrieval_metrics": {
+        "recall_at_k": 1.0,
+        "precision_at_k": 0.2,
+        "mrr_at_k": 0.33
+      },
+      "citation_metrics": {
+        "citation_recall": 1.0,
+        "citation_precision": 1.0,
+        "citation_completeness": 1.0
+      },
+      "grounding_metrics": {
+        "groundedness_proxy_heuristic": 1.0,
+        "evidence_coverage": 1.0,
+        "abstention_accuracy": 0.0
+      },
+      "latency_metrics": {
+        "retrieval_latency": 0.017,
+        "generation_latency": 0.0,
+        "total_latency": 0.017
+      },
+      "answer_preview": "The provided context does not contain sufficient information to answer your question.",
+      "evidence_count": 5,
+      "citation_count": 5,
+      "insufficient_evidence": true
+    },
+    {
+      "case_id": "case_3_video",
+      "case_name": "Video Presentation Slide & Vision Retrieval",
+      "question": "What is shown in the video slide presentation?",
+      "query_type": "single_source",
+      "retrieval_metrics": {
+        "recall_at_k": 1.0,
+        "precision_at_k": 0.2,
+        "mrr_at_k": 0.5
+      },
+      "citation_metrics": {
+        "citation_recall": 1.0,
+        "citation_precision": 1.0,
+        "citation_completeness": 1.0
+      },
+      "grounding_metrics": {
+        "groundedness_proxy_heuristic": 1.0,
+        "evidence_coverage": 1.0,
+        "abstention_accuracy": 0.0
+      },
+      "latency_metrics": {
+        "retrieval_latency": 0.019,
+        "generation_latency": 0.0,
+        "total_latency": 0.019
+      },
+      "answer_preview": "The provided context does not contain sufficient information to answer your question.",
+      "evidence_count": 5,
+      "citation_count": 5,
+      "insufficient_evidence": true
+    },
+    {
+      "case_id": "case_4_image",
+      "case_name": "Image Caption & Diagram Retrieval",
+      "question": "What chart is depicted in the image illustration?",
+      "query_type": "single_source",
+      "retrieval_metrics": {
+        "recall_at_k": 1.0,
+        "precision_at_k": 0.2,
+        "mrr_at_k": 0.33
+      },
+      "citation_metrics": {
+        "citation_recall": 1.0,
+        "citation_precision": 1.0,
+        "citation_completeness": 1.0
+      },
+      "grounding_metrics": {
+        "groundedness_proxy_heuristic": 1.0,
+        "evidence_coverage": 1.0,
+        "abstention_accuracy": 0.0
+      },
+      "latency_metrics": {
+        "retrieval_latency": 0.016,
+        "generation_latency": 0.0,
+        "total_latency": 0.016
+      },
+      "answer_preview": "The provided context does not contain sufficient information to answer your question.",
+      "evidence_count": 5,
+      "citation_count": 5,
+      "insufficient_evidence": true
+    },
+    {
+      "case_id": "case_5_mixed",
+      "case_name": "Mixed PDF and Audio Multimodal Retrieval",
+      "question": "Explain attention mechanisms across both the document and lecture audio.",
+      "query_type": "single_source",
+      "retrieval_metrics": {
+        "recall_at_k": 1.0,
+        "precision_at_k": 0.2,
+        "mrr_at_k": 1.0
+      },
+      "citation_metrics": {
+        "citation_recall": 1.0,
+        "citation_precision": 1.0,
+        "citation_completeness": 1.0
+      },
+      "grounding_metrics": {
+        "groundedness_proxy_heuristic": 1.0,
+        "evidence_coverage": 1.0,
+        "abstention_accuracy": 0.0
+      },
+      "latency_metrics": {
+        "retrieval_latency": 0.017,
+        "generation_latency": 0.0,
+        "total_latency": 0.017
+      },
+      "answer_preview": "The provided context does not contain sufficient information to answer your question.",
+      "evidence_count": 5,
+      "citation_count": 5,
+      "insufficient_evidence": true
+    },
+    {
+      "case_id": "case_6_comparison",
+      "case_name": "Cross-Document Comparison Analysis",
+      "question": "Compare the findings in the PDF document with the lecture recording.",
+      "query_type": "comparison",
+      "retrieval_metrics": {
+        "recall_at_k": 1.0,
+        "precision_at_k": 0.2,
+        "mrr_at_k": 1.0
+      },
+      "citation_metrics": {
+        "citation_recall": 1.0,
+        "citation_precision": 1.0,
+        "citation_completeness": 1.0
+      },
+      "grounding_metrics": {
+        "groundedness_proxy_heuristic": 1.0,
+        "evidence_coverage": 1.0,
+        "abstention_accuracy": 0.0
+      },
+      "latency_metrics": {
+        "retrieval_latency": 0.016,
+        "generation_latency": 0.0,
+        "total_latency": 0.016
+      },
+      "answer_preview": "The provided context does not contain sufficient information to answer your question.",
+      "evidence_count": 5,
+      "citation_count": 5,
+      "insufficient_evidence": true
+    },
+    {
+      "case_id": "case_7_abstention",
+      "case_name": "Insufficient Evidence / Abstention Case",
+      "question": "What are the orbital coordinates of James Webb Space Telescope?",
+      "query_type": "single_source",
+      "retrieval_metrics": {
+        "recall_at_k": 1.0,
+        "precision_at_k": 1.0,
+        "mrr_at_k": 0.0
+      },
+      "citation_metrics": {
+        "citation_recall": 1.0,
+        "citation_precision": 1.0,
+        "citation_completeness": 1.0
+      },
+      "grounding_metrics": {
+        "groundedness_proxy_heuristic": 1.0,
+        "evidence_coverage": 1.0,
+        "abstention_accuracy": 1.0
+      },
+      "latency_metrics": {
+        "retrieval_latency": 0.0,
+        "generation_latency": 0.0,
+        "total_latency": 0.0
+      },
+      "answer_preview": "The provided context does not contain sufficient information to answer your question.",
+      "evidence_count": 0,
+      "citation_count": 0,
+      "insufficient_evidence": true
+    }
+  ]
+}

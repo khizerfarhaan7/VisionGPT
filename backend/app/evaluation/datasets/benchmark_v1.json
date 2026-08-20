@@ -1,0 +1,76 @@
+{
+  "dataset_version": "1.0",
+  "description": "VisionGPT Multimodal RAG Benchmark Suite v1",
+  "cases": [
+    {
+      "id": "case_1_pdf",
+      "name": "PDF Page Retrieval & Grounding",
+      "question": "What mechanism allows transformers to process tokens concurrently?",
+      "expected_source": "pdf_doc",
+      "expected_modality": "pdf",
+      "expected_locator": "page 1",
+      "expected_keywords": ["self-attention", "concurrently", "tokens"],
+      "should_abstain": false
+    },
+    {
+      "id": "case_2_audio",
+      "name": "Audio Timestamp Retrieval",
+      "question": "What topic is discussed in the lecture audio recording?",
+      "expected_source": "audio_rec",
+      "expected_modality": "audio",
+      "expected_locator": "00:00–00:12",
+      "expected_keywords": ["deep learning", "lecture"],
+      "should_abstain": false
+    },
+    {
+      "id": "case_3_video",
+      "name": "Video Presentation Slide & Vision Retrieval",
+      "question": "What is shown in the video slide presentation?",
+      "expected_source": "vid_clip",
+      "expected_modality": "video",
+      "expected_locator": "00:00–00:15",
+      "expected_keywords": ["slide", "projection matrix"],
+      "should_abstain": false
+    },
+    {
+      "id": "case_4_image",
+      "name": "Image Caption & Diagram Retrieval",
+      "question": "What chart is depicted in the image illustration?",
+      "expected_source": "chart_img",
+      "expected_modality": "image",
+      "expected_locator": "image_caption",
+      "expected_keywords": ["bar chart", "graph"],
+      "should_abstain": false
+    },
+    {
+      "id": "case_5_mixed",
+      "name": "Mixed PDF and Audio Multimodal Retrieval",
+      "question": "Explain attention mechanisms across both the document and lecture audio.",
+      "expected_source": "pdf_doc",
+      "expected_modality": "pdf",
+      "expected_locator": "page 1",
+      "expected_keywords": ["attention", "transformers"],
+      "should_abstain": false
+    },
+    {
+      "id": "case_6_comparison",
+      "name": "Cross-Document Comparison Analysis",
+      "question": "Compare the findings in the PDF document with the lecture recording.",
+      "expected_source": "pdf_doc",
+      "expected_modality": "pdf",
+      "expected_locator": "page 1",
+      "expected_keywords": ["parallelization", "attention"],
+      "should_abstain": false
+    },
+    {
+      "id": "case_7_abstention",
+      "name": "Insufficient Evidence / Abstention Case",
+      "question": "What are the orbital coordinates of James Webb Space Telescope?",
+      "expected_source": "none",
+      "expected_modality": "none",
+      "expected_locator": "none",
+      "expected_keywords": [],
+      "should_abstain": true
+    }
+  ]
+}

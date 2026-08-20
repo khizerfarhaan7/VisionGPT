@@ -23,7 +23,7 @@ async def get_job_status(job_id: str):
     """
     Retrieves the status, progress (0-100), timestamps, and result metadata of a background job.
     """
-    job = JobService.get_job(job_id.strip())
+    job = await JobService.get_job(job_id.strip())
     if not job:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -42,7 +42,7 @@ async def list_jobs(session_id: Optional[str] = None, limit: int = 50):
     """
     Lists registered background jobs, sorted by creation time descending.
     """
-    jobs = JobService.list_jobs(session_id=session_id, limit=limit)
+    jobs = await JobService.list_jobs(session_id=session_id, limit=limit)
     return {
         "jobs": jobs,
         "total_count": len(jobs)
@@ -60,7 +60,7 @@ async def cancel_job(job_id: str):
     Requests cancellation for a background job.
     Queued jobs are cancelled immediately; running jobs set a cancellation flag for worker cleanup.
     """
-    job = JobService.cancel_job(job_id.strip())
+    job = await JobService.cancel_job(job_id.strip())
     if not job:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

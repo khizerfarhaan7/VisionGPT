@@ -32,16 +32,17 @@ class JobWorkerService:
         pdf_id = os.path.splitext(safe_filename)[0]
         pdf_path = Path(settings.UPLOAD_DIR) / "pdfs" / safe_filename
 
-        JobService.update_job_progress(job_id, 10, status="running", metadata={"stage": "started", "file": safe_filename})
+        await JobService.update_job_progress(job_id, 10, status="running", metadata={"stage": "started", "file": safe_filename})
         if not pdf_path.exists():
             raise FileNotFoundError(f"PDF file '{safe_filename}' not found in uploads directory.")
 
         # Stage 25: Extract text using PyMuPDF
-        if JobService.get_job(job_id).get("cancel_requested"):
-            JobService.update_job_progress(job_id, 25, status="cancelled")
+        job_state = await JobService.get_job(job_id)
+        if job_state and job_state.get("cancel_requested"):
+            await JobService.update_job_progress(job_id, 25, status="cancelled")
             return {"status": "cancelled"}
 
-        JobService.update_job_progress(job_id, 25, status="running", metadata={"stage": "text_extraction"})
+        await JobService.update_job_progress(job_id, 25, status="running", metadata={"stage": "text_extraction"})
         import fitz
         doc = fitz.open(str(pdf_path))
         page_count = doc.page_count
@@ -53,16 +54,16 @@ class JobWorkerService:
         doc.close()
 
         # Stage 50: Chunk & Generate FAISS Embeddings
-        if JobService.get_job(job_id).get("cancel_requested"):
-            JobService.update_job_progress(job_id, 50, status="cancelled")
+        job_state = await JobService.get_job(job_id)
+        if job_state and job_state.get("cancel_requested"):
+            await JobService.update_job_progress(job_id, 50, status="cancelled")
             return {"status": "cancelled"}
 
-        JobService.update_job_progress(job_id, 50, status="running", metadata={"stage": "faiss_embedding"})
+        await JobService.update_job_progress(job_id, 50, status="running", metadata={"stage": "faiss_embedding"})
         import faiss
         import json
         from app.core.rag import get_embedding_model
 
-        # Build chunks
         chunks = []
         target_min_words = 500
         target_max_words = 800
@@ -106,11 +107,12 @@ class JobWorkerService:
         index.add(embeddings)
 
         # Stage 75: Save Vector Store & Database Metadata
-        if JobService.get_job(job_id).get("cancel_requested"):
-            JobService.update_job_progress(job_id, 75, status="cancelled")
+        job_state = await JobService.get_job(job_id)
+        if job_state and job_state.get("cancel_requested"):
+            await JobService.update_job_progress(job_id, 75, status="cancelled")
             return {"status": "cancelled"}
 
-        JobService.update_job_progress(job_id, 75, status="running", metadata={"stage": "persistence"})
+        await JobService.update_job_progress(job_id, 75, status="running", metadata={"stage": "persistence"})
         vector_store_dir = Path(settings.UPLOAD_DIR) / "vector_store" / pdf_id
         vector_store_dir.mkdir(parents=True, exist_ok=True)
 
@@ -145,27 +147,29 @@ class JobWorkerService:
         audio_id = os.path.splitext(safe_filename)[0]
         audio_path = Path(settings.UPLOAD_DIR) / "audio" / safe_filename
 
-        JobService.update_job_progress(job_id, 10, status="running", metadata={"stage": "started", "file": safe_filename})
+        await JobService.update_job_progress(job_id, 10, status="running", metadata={"stage": "started", "file": safe_filename})
         if not audio_path.exists():
             raise FileNotFoundError(f"Audio file '{safe_filename}' not found in uploads directory.")
 
         # Stage 25: Speech-to-Text Transcription via Faster-Whisper
-        if JobService.get_job(job_id).get("cancel_requested"):
-            JobService.update_job_progress(job_id, 25, status="cancelled")
+        job_state = await JobService.get_job(job_id)
+        if job_state and job_state.get("cancel_requested"):
+            await JobService.update_job_progress(job_id, 25, status="cancelled")
             return {"status": "cancelled"}
 
-        JobService.update_job_progress(job_id, 25, status="running", metadata={"stage": "whisper_transcription"})
+        await JobService.update_job_progress(job_id, 25, status="running", metadata={"stage": "whisper_transcription"})
         from app.api.v1.endpoints.audio import get_whisper_model, chunk_whisper_segments
         whisper_model = get_whisper_model()
         segments, info = whisper_model.transcribe(str(audio_path), language="en", task="transcribe")
         segments_list = list(segments)
 
         # Stage 50: Chunking & FAISS Vector Indexing
-        if JobService.get_job(job_id).get("cancel_requested"):
-            JobService.update_job_progress(job_id, 50, status="cancelled")
+        job_state = await JobService.get_job(job_id)
+        if job_state and job_state.get("cancel_requested"):
+            await JobService.update_job_progress(job_id, 50, status="cancelled")
             return {"status": "cancelled"}
 
-        JobService.update_job_progress(job_id, 50, status="running", metadata={"stage": "vector_indexing"})
+        await JobService.update_job_progress(job_id, 50, status="running", metadata={"stage": "vector_indexing"})
         import faiss
         import json
         from app.core.rag import get_embedding_model
@@ -180,11 +184,12 @@ class JobWorkerService:
         index.add(embeddings)
 
         # Stage 75: Persistence
-        if JobService.get_job(job_id).get("cancel_requested"):
-            JobService.update_job_progress(job_id, 75, status="cancelled")
+        job_state = await JobService.get_job(job_id)
+        if job_state and job_state.get("cancel_requested"):
+            await JobService.update_job_progress(job_id, 75, status="cancelled")
             return {"status": "cancelled"}
 
-        JobService.update_job_progress(job_id, 75, status="running", metadata={"stage": "persistence"})
+        await JobService.update_job_progress(job_id, 75, status="running", metadata={"stage": "persistence"})
         vector_store_dir = Path(settings.UPLOAD_DIR) / "vector_store" / "audio" / audio_id
         vector_store_dir.mkdir(parents=True, exist_ok=True)
 
@@ -221,26 +226,26 @@ class JobWorkerService:
         video_id = os.path.splitext(safe_filename)[0]
         video_path = Path(settings.UPLOAD_DIR) / "audio" / safe_filename
 
-        JobService.update_job_progress(job_id, 10, status="running", metadata={"stage": "started", "file": safe_filename})
+        await JobService.update_job_progress(job_id, 10, status="running", metadata={"stage": "started", "file": safe_filename})
         if not video_path.exists():
             raise FileNotFoundError(f"Video file '{safe_filename}' not found in uploads directory.")
 
         # Stage 25: Frame sampling & Speech STT
-        if JobService.get_job(job_id).get("cancel_requested"):
-            JobService.update_job_progress(job_id, 25, status="cancelled")
+        job_state = await JobService.get_job(job_id)
+        if job_state and job_state.get("cancel_requested"):
+            await JobService.update_job_progress(job_id, 25, status="cancelled")
             return {"status": "cancelled"}
 
-        JobService.update_job_progress(job_id, 25, status="running", metadata={"stage": "multimodal_processing"})
+        await JobService.update_job_progress(job_id, 25, status="running", metadata={"stage": "multimodal_processing"})
         from app.core.video import index_video_multimodal
 
-        # Run video indexing pipeline
         res = index_video_multimodal(
             video_path=video_path,
             interval_seconds=settings.VIDEO_INTERVAL_SECONDS,
             window_size=settings.VIDEO_WINDOW_SIZE
         )
 
-        JobService.update_job_progress(job_id, 75, status="running", metadata={"stage": "persistence"})
+        await JobService.update_job_progress(job_id, 75, status="running", metadata={"stage": "persistence"})
         result_meta = {
             "document_id": video_id,
             "session_id": session_id,

@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     DateTime,
     ForeignKey,
     Integer,
@@ -177,3 +178,32 @@ class SourceReference(Base):
     # Relationships
     message: Mapped["ChatMessage"] = relationship("ChatMessage", back_populates="sources")
     document: Mapped[Optional["Document"]] = relationship("Document", back_populates="source_references")
+
+
+class JobRecord(Base):
+    """
+    Persistent state tracking for async multimodal background processing tasks.
+    """
+    __tablename__ = "jobs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    job_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(50), default="queued", nullable=False, index=True)
+    progress: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    session_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    document_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    result: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+

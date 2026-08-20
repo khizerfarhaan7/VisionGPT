@@ -33,7 +33,7 @@ async def index_video_async(payload: VideoIndexRequestSchema):
             detail="The requested video file was not found in the uploads directory."
         )
 
-    job = JobService.create_job(
+    job = await JobService.create_job(
         job_type="video_processing",
         document_id=video_id,
         metadata={"filename": safe_filename}

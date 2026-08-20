@@ -235,7 +235,7 @@ async def index_pdf_async(payload: PDFIndexRequestSchema):
             detail="The requested PDF document was not found."
         )
 
-    job = JobService.create_job(
+    job = await JobService.create_job(
         job_type="pdf_indexing",
         document_id=pdf_id,
         metadata={"filename": safe_filename}

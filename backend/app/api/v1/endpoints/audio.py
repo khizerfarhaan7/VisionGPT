@@ -108,7 +108,7 @@ async def transcribe_audio_async(payload: AudioTranscribeRequestSchema):
             detail="The requested audio file was not found in the uploads directory."
         )
 
-    job = JobService.create_job(
+    job = await JobService.create_job(
         job_type="audio_transcription",
         document_id=audio_id,
         metadata={"filename": safe_filename}

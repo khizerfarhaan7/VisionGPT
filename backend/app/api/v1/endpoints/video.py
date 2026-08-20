@@ -110,13 +110,15 @@ async def chat_video(payload: VideoChatRequestSchema):
     )
     
     try:
-        # execute_local_rag handles embedding lookup, FAISS search, query rewriting, and Ollama invocation
-        result = await execute_local_rag(
-            vector_store_dir=vector_store_dir,
+        from app.services.rag_orchestrator import RagOrchestrator
+
+        result = await RagOrchestrator.query(
             question=payload.question,
+            vector_store_dir=vector_store_dir,
             history=payload.history,
             system_prompt=system_prompt,
-            k=3
+            k=3,
+            mode="local"
         )
         
         elapsed_time = time.time() - start_time

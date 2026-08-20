@@ -1,17 +1,19 @@
 import logging
 from fastapi import APIRouter, HTTPException, status
 from app.schemas.chat import ChatQueryRequestSchema, ChatQueryResponseSchema
-from app.services.rag_service import RAGService
+from app.services.rag_orchestrator import RagOrchestrator
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
 
 @router.post("/query", response_model=ChatQueryResponseSchema, status_code=status.HTTP_200_OK)
 async def query_rag(payload: ChatQueryRequestSchema):
     """
     RAG Chat API endpoint.
     Accepts a vector_store_id and user question, retrieves relevant knowledge chunks,
-    generates a grounded response using Gemini, and returns sources with text previews.
+    generates a grounded response using Gemini or Local RAG via RagOrchestrator,
+    and returns normalized sources with text previews.
     """
     if not payload.vector_store_id or not payload.vector_store_id.strip():
         raise HTTPException(
@@ -26,9 +28,10 @@ async def query_rag(payload: ChatQueryRequestSchema):
         )
 
     try:
-        return await RAGService.answer_question(
+        return await RagOrchestrator.query(
+            question=payload.question.strip(),
             vector_store_id=payload.vector_store_id.strip(),
-            question=payload.question.strip()
+            mode="auto"
         )
     except HTTPException:
         raise

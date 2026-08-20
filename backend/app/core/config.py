@@ -77,6 +77,9 @@ class Settings(BaseSettings):
     # Resource Profile ("local", "high_quality", "custom")
     VISIONGPT_PROFILE: str = "local"
 
+    # RAG Orchestration Settings ("local", "cloud", "auto")
+    RAG_PROVIDER: str = "local"
+
     # API Keys
     GEMINI_API_KEY: str | None = None
     GEMINI_MODEL: str = "gemini-2.5-flash"

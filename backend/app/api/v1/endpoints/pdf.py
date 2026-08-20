@@ -353,12 +353,15 @@ async def chat_pdf(payload: PDFChatRequestSchema):
         "4. Do not reference internal components, vector indexes, FAISS, embeddings, or technical systems in your answers."
     )
     
-    return await execute_local_rag(
-        vector_store_dir=vector_store_dir,
+    from app.services.rag_orchestrator import RagOrchestrator
+
+    return await RagOrchestrator.query(
         question=payload.question,
+        vector_store_dir=vector_store_dir,
         history=payload.history,
         system_prompt=system_prompt,
-        k=3
+        k=3,
+        mode="local"
     )
 
 

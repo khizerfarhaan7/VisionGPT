@@ -61,10 +61,36 @@ All application, validation, and unhandled errors return a consistent JSON schem
 ### Machine-Readable Error Codes
 * `NOT_FOUND` (HTTP 404): Resource or document missing.
 * `VALIDATION_ERROR` (HTTP 422): Invalid request parameters or payload.
+* `PAYLOAD_TOO_LARGE` (HTTP 413): Request body exceeds maximum upload limit (`MAX_UPLOAD_SIZE_MB`).
+* `TOO_MANY_REQUESTS` (HTTP 429): Rate limit exceeded for sensitive operation.
 * `UNAUTHORIZED` (HTTP 401): Missing or invalid credentials.
-* `FORBIDDEN` (HTTP 403): Access denied.
+* `FORBIDDEN` (HTTP 403): Access denied or path traversal blocked.
 * `RESOURCE_BUSY` (HTTP 429): AI model or queue worker is currently busy.
 * `INTERNAL_SERVER_ERROR` (HTTP 500): Server error (sanitized message returned).
+
+---
+
+## 3. Security Hardening & Abuse Protections
+
+### Security Response Headers
+Every HTTP response automatically includes production security headers:
+* `X-Content-Type-Options: nosniff` — Prevents MIME-type sniffing attacks.
+* `X-Frame-Options: DENY` — Prevents clickjacking iframe embedding.
+* `Referrer-Policy: strict-origin-when-cross-origin` — Protects cross-origin query leaks.
+
+### Payload Size Protection (HTTP 413)
+* Enforces centralized `MAX_UPLOAD_SIZE_MB` (Default 100 MB).
+* Requests exceeding `Content-Length` limits are rejected with HTTP 413 before binary data is loaded into server RAM.
+
+### In-Process Rate Limiter (HTTP 429)
+* Lightweight sliding-window in-process rate limiter (`SECURITY_RATE_LIMIT_ENABLED=true`).
+* Default window: 100 requests per 60 seconds (`SECURITY_RATE_LIMIT_REQUESTS=100`, `SECURITY_RATE_LIMIT_WINDOW_SECONDS=60`).
+* Note: Limiter operates process-locally in memory without Redis/external infrastructure dependencies.
+
+### Filename Sanitization & Path Traversal Guard
+* Strips path control characters (`../`, `..\`, `/`, `\`).
+* Rejects dangerous script/executable extensions (`.exe`, `.sh`, `.bat`, `.py`, `.js`, `.php`).
+* Enforces `validate_safe_path()` to ensure files remain strictly contained inside designated `uploads/` directories.
 
 ---
 

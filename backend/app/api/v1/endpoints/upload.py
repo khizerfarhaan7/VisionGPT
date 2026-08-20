@@ -22,8 +22,9 @@ async def upload_image(file: UploadFile = File(...)):
     Validates file type (png, jpg, jpeg, webp) and file size (max 20MB).
     Saves the image under a unique UUID filename.
     """
-    # 1. Validate file extension
-    original_filename = file.filename or "unknown"
+    # 1. Sanitize original filename and validate extension
+    from app.core.security import sanitize_filename
+    original_filename = sanitize_filename(file.filename or "unknown")
     file_ext = Path(original_filename).suffix.lower()
     
     # 2. Validate content type

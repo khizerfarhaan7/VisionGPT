@@ -99,6 +99,11 @@ class Settings(BaseSettings):
     # Metrics & Observability Configuration
     METRICS_ENABLED: bool = True
 
+    # Security & API Rate Limiting Configuration
+    SECURITY_RATE_LIMIT_ENABLED: bool = True
+    SECURITY_RATE_LIMIT_REQUESTS: int = 100
+    SECURITY_RATE_LIMIT_WINDOW_SECONDS: int = 60
+
     # API Keys
     GEMINI_API_KEY: str | None = None
     GEMINI_MODEL: str = "gemini-2.5-flash"
@@ -135,6 +140,14 @@ class Settings(BaseSettings):
             # Enforce CORS configuration in production
             if not self.BACKEND_CORS_ORIGINS:
                 raise ValueError("BACKEND_CORS_ORIGINS must be explicitly specified in production environment.")
+            if "*" in self.BACKEND_CORS_ORIGINS:
+                raise ValueError("Wildcard '*' origin is forbidden in production when credential support is enabled.")
+
+        # Validate Rate Limit Configuration
+        if self.SECURITY_RATE_LIMIT_REQUESTS <= 0:
+            raise ValueError(f"Invalid SECURITY_RATE_LIMIT_REQUESTS '{self.SECURITY_RATE_LIMIT_REQUESTS}'. Must be > 0.")
+        if self.SECURITY_RATE_LIMIT_WINDOW_SECONDS <= 0:
+            raise ValueError(f"Invalid SECURITY_RATE_LIMIT_WINDOW_SECONDS '{self.SECURITY_RATE_LIMIT_WINDOW_SECONDS}'. Must be > 0.")
 
         # Validate RAG_PROVIDER
         provider = self.RAG_PROVIDER.lower().strip()

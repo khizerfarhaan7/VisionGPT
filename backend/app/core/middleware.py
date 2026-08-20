@@ -1,24 +1,72 @@
 import logging
 import time
 import uuid
-from typing import Any, Callable, Dict, Optional
+from collections import defaultdict
+from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.core.config import settings
 from app.core.exceptions import VisionGPTError
 
 logger = logging.getLogger("visiongpt.requests")
 
 
+class InProcessRateLimiter:
+    """
+    Lightweight, in-process rate limiter for VisionGPT.
+    Tracks client IP request timestamps in memory using a sliding window algorithm.
+    Periodically purges expired entries to prevent memory leaks.
+    Does NOT store request bodies, uploaded files, API keys, or user credentials.
+    """
+    _hits: Dict[str, List[float]] = defaultdict(list)
+
+    @classmethod
+    def is_rate_limited(cls, client_ip: str) -> bool:
+        if not getattr(settings, "SECURITY_RATE_LIMIT_ENABLED", True):
+            return False
+
+        now = time.time()
+        window = getattr(settings, "SECURITY_RATE_LIMIT_WINDOW_SECONDS", 60)
+        max_requests = getattr(settings, "SECURITY_RATE_LIMIT_REQUESTS", 100)
+
+        # Filter out expired timestamps for client_ip
+        cls._hits[client_ip] = [t for t in cls._hits[client_ip] if now - t < window]
+
+        if len(cls._hits[client_ip]) >= max_requests:
+            return True
+
+        cls._hits[client_ip].append(now)
+
+        # Bounded memory cleanup
+        if len(cls._hits) > 2000:
+            for ip in list(cls._hits.keys()):
+                cls._hits[ip] = [t for t in cls._hits[ip] if now - t < window]
+                if not cls._hits[ip]:
+                    del cls._hits[ip]
+
+        return False
+
+    @classmethod
+    def reset(cls) -> None:
+        """
+        Resets rate limiter state (useful for test isolation).
+        """
+        cls._hits.clear()
+
+
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
     """
-    Structured Request Logging & Request Correlation ID Middleware.
-    Generates or propagates 'X-Request-ID' across HTTP requests and responses.
-    Logs method, path, status_code, duration_ms, and request_id.
-    Strictly protects privacy: NEVER logs request/response body contents or Authorization secrets.
+    Structured Request Logging, Correlation ID, Payload Size Protection, Security Headers, and Rate Limiting Middleware.
+    - Generates/propagates 'X-Request-ID' across HTTP requests & responses.
+    - Injects production security headers (nosniff, DENY, Referrer-Policy).
+    - Enforces HTTP 413 Payload Too Large protection based on Content-Length.
+    - Enforces HTTP 429 Rate Limiting protection.
+    - Strictly protects privacy: NEVER logs request/response body contents or Authorization secrets.
     """
 
     async def dispatch(self, request: Request, call_next: Callable) -> Any:
@@ -30,12 +78,61 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         request.state.request_id = req_id
         start_time = time.time()
 
+        # 1. Request Payload Size Protection (HTTP 413)
+        content_length_str = request.headers.get("content-length")
+        if content_length_str:
+            try:
+                content_length = int(content_length_str)
+                max_bytes = getattr(settings, "MAX_UPLOAD_SIZE_MB", 100) * 1024 * 1024
+                if content_length > max_bytes:
+                    logger.warning(
+                        f"HTTP 413 Payload Too Large ({content_length} bytes > {max_bytes} bytes) "
+                        f"on '{request.url.path}' [Request-ID: {req_id}]"
+                    )
+                    return JSONResponse(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        content={
+                            "success": False,
+                            "error": {
+                                "code": "PAYLOAD_TOO_LARGE",
+                                "message": f"Request payload size exceeds maximum allowed limit of {settings.MAX_UPLOAD_SIZE_MB}MB.",
+                                "request_id": req_id
+                            }
+                        },
+                        headers={"X-Request-ID": req_id}
+                    )
+            except ValueError:
+                pass
+
+        # 2. Rate Limiting Protection (HTTP 429)
+        client_ip = request.client.host if request.client else "127.0.0.1"
+        if InProcessRateLimiter.is_rate_limited(client_ip):
+            logger.warning(
+                f"HTTP 429 Rate Limit Exceeded for IP '{client_ip}' on '{request.url.path}' "
+                f"[Request-ID: {req_id}]"
+            )
+            return JSONResponse(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                content={
+                    "success": False,
+                    "error": {
+                        "code": "TOO_MANY_REQUESTS",
+                        "message": "Rate limit exceeded. Please try again later.",
+                        "request_id": req_id
+                    }
+                },
+                headers={"X-Request-ID": req_id}
+            )
+
         try:
             response = await call_next(request)
             duration_ms = round((time.time() - start_time) * 1000, 2)
 
-            # Inject X-Request-ID header into response
+            # Inject Correlation ID & Security Headers
             response.headers["X-Request-ID"] = req_id
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["X-Frame-Options"] = "DENY"
+            response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
 
             # Record HTTP request metrics
             from app.services.metrics_service import MetricsService
@@ -82,9 +179,6 @@ def sanitize_error_message(message: str) -> str:
 
 
 async def visiongpt_exception_handler(request: Request, exc: VisionGPTError) -> JSONResponse:
-    """
-    Handles custom application VisionGPTErrors with machine-readable error codes and request IDs.
-    """
     req_id = get_request_id(request)
     body = {
         "success": False,
@@ -98,14 +192,16 @@ async def visiongpt_exception_handler(request: Request, exc: VisionGPTError) -> 
     return JSONResponse(
         status_code=exc.status_code,
         content=body,
-        headers={"X-Request-ID": req_id}
+        headers={
+            "X-Request-ID": req_id,
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "Referrer-Policy": "strict-origin-when-cross-origin"
+        }
     )
 
 
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
-    """
-    Handles standard FastAPI HTTPExceptions while retaining existing error contract compatibility.
-    """
     req_id = get_request_id(request)
     code_map = {
         400: "BAD_REQUEST",
@@ -113,6 +209,7 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
         403: "FORBIDDEN",
         404: "NOT_FOUND",
         409: "CONFLICT",
+        413: "PAYLOAD_TOO_LARGE",
         422: "VALIDATION_ERROR",
         429: "TOO_MANY_REQUESTS",
         500: "INTERNAL_SERVER_ERROR"
@@ -129,14 +226,16 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
     return JSONResponse(
         status_code=exc.status_code,
         content=body,
-        headers={"X-Request-ID": req_id}
+        headers={
+            "X-Request-ID": req_id,
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "Referrer-Policy": "strict-origin-when-cross-origin"
+        }
     )
 
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
-    """
-    Handles Pydantic RequestValidationErrors (HTTP 422) with structured field error breakdown.
-    """
     req_id = get_request_id(request)
     sanitized_errors = []
     for err in exc.errors():
@@ -159,15 +258,16 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content=body,
-        headers={"X-Request-ID": req_id}
+        headers={
+            "X-Request-ID": req_id,
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "Referrer-Policy": "strict-origin-when-cross-origin"
+        }
     )
 
 
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    """
-    Global catch-all exception handler for unhandled server errors (HTTP 500).
-    Logs traceback server-side and returns a sanitized JSON response with request ID.
-    """
     req_id = get_request_id(request)
     logger.error(f"Unhandled Exception on {request.method} '{request.url.path}' [Request-ID: {req_id}]: {exc}", exc_info=True)
 
@@ -182,11 +282,14 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content=body,
-        headers={"X-Request-ID": req_id}
+        headers={
+            "X-Request-ID": req_id,
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "Referrer-Policy": "strict-origin-when-cross-origin"
+        }
     )
 
-
-from starlette.exceptions import HTTPException as StarletteHTTPException
 
 def setup_middleware_and_exceptions(app: FastAPI) -> None:
     """

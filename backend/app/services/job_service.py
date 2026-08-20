@@ -187,8 +187,14 @@ class JobService:
             async with SessionLocal() as db:
                 res = await db.execute(select(JobRecord).where(JobRecord.id == uid))
                 job_rec = res.scalar_one_or_none()
-                if not job_rec:
-                    return None
+                # Prevent illegal transitions from terminal states
+                TERMINAL_STATUSES = {"completed", "failed", "cancelled", "interrupted"}
+                if job_rec.status in TERMINAL_STATUSES:
+                    logger.warning(
+                        f"JobService: Blocked illegal state transition from terminal state '{job_rec.status}' "
+                        f"to '{status}' for job '{job_id}'."
+                    )
+                    return cls._job_record_to_dict(job_rec)
 
                 if job_rec.cancel_requested and status != "cancelled":
                     job_rec.status = "cancelled"
@@ -237,6 +243,14 @@ class JobService:
                 if not job_rec:
                     return None
 
+                TERMINAL_STATUSES = {"completed", "failed", "cancelled", "interrupted"}
+                if job_rec.status in TERMINAL_STATUSES:
+                    logger.warning(
+                        f"JobService: Job '{job_id}' is already in terminal state '{job_rec.status}'. "
+                        f"Skipping completion."
+                    )
+                    return cls._job_record_to_dict(job_rec)
+
                 job_rec.status = "completed"
                 job_rec.progress = 100
                 job_rec.completed_at = datetime.now(timezone.utc)
@@ -280,6 +294,14 @@ class JobService:
                 job_rec = res.scalar_one_or_none()
                 if not job_rec:
                     return None
+
+                TERMINAL_STATUSES = {"completed", "failed", "cancelled", "interrupted"}
+                if job_rec.status in TERMINAL_STATUSES:
+                    logger.warning(
+                        f"JobService: Job '{job_id}' is already in terminal state '{job_rec.status}'. "
+                        f"Skipping fail status update."
+                    )
+                    return cls._job_record_to_dict(job_rec)
 
                 job_rec.status = "failed"
                 job_rec.completed_at = datetime.now(timezone.utc)

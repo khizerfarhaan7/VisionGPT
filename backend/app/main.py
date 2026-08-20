@@ -44,6 +44,10 @@ if settings.BACKEND_CORS_ORIGINS:
         allow_headers=["*"],
     )
 
+# Register Request Logging & Exception Handlers
+from app.core.middleware import setup_middleware_and_exceptions
+setup_middleware_and_exceptions(app)
+
 # Include API endpoints under API version prefix
 app.include_router(api_router, prefix=settings.API_V1_STR)
 

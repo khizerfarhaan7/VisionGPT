@@ -1,28 +1,54 @@
-from fastapi import APIRouter, Depends
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
-from app.core.database import get_db
-from app.core.config import settings
-from app.schemas.health import HealthCheckSchema
+import logging
+from fastapi import APIRouter, status
 
+from app.schemas.health import (
+    HealthResponseSchema,
+    LivenessResponseSchema,
+    ReadinessResponseSchema,
+)
+from app.services.health_service import HealthService
+
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
-@router.get("", response_model=HealthCheckSchema, status_code=200)
-async def check_health(db: AsyncSession = Depends(get_db)):
+
+@router.get(
+    "",
+    response_model=HealthResponseSchema,
+    status_code=status.HTTP_200_OK,
+    summary="Detailed backend component health & resource diagnostics"
+)
+async def get_health():
     """
-    Perform a health check verification.
-    Verifies that the API service is running and PostgreSQL is reachable.
+    Detailed component diagnostics endpoint.
+    Reports database, Ollama, Gemini configuration presence, CUDA availability,
+    currently cached loaded AI models in RAM, and host memory metrics.
+    Guarantees zero AI model loading and never exposes API keys or secrets.
     """
-    db_status = "healthy"
-    try:
-        # Perform basic database connectivity query
-        await db.execute(text("SELECT 1"))
-    except Exception as e:
-        db_status = f"unhealthy: {str(e)}"
-        
-    return {
-        "status": "healthy",
-        "environment": settings.ENVIRONMENT,
-        "database": db_status,
-        "version": "0.1.0"
-    }
+    return await HealthService.get_detailed_health()
+
+
+@router.get(
+    "/live",
+    response_model=LivenessResponseSchema,
+    status_code=status.HTTP_200_OK,
+    summary="Liveness probe endpoint"
+)
+async def get_liveness():
+    """
+    Liveness probe. Returns HTTP 200 if the backend application process is alive.
+    """
+    return HealthService.get_liveness()
+
+
+@router.get(
+    "/ready",
+    response_model=ReadinessResponseSchema,
+    status_code=status.HTTP_200_OK,
+    summary="Readiness probe endpoint"
+)
+async def get_readiness():
+    """
+    Readiness probe. Verifies critical database connectivity without loading any AI models.
+    """
+    return await HealthService.get_readiness()

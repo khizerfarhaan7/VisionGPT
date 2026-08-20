@@ -51,7 +51,16 @@ class Settings(BaseSettings):
             if self.DATABASE_URL.startswith("postgresql://"):
                 return self.DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
             return self.DATABASE_URL
-        return f"postgresql+asyncpg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_SERVER}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+            
+        server = self.POSTGRES_SERVER
+        if server == "db" and not os.path.exists("/.dockerenv"):
+            import socket
+            try:
+                socket.gethostbyname(server)
+            except Exception:
+                server = "localhost"
+
+        return f"postgresql+asyncpg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{server}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
 
     # JWT
     JWT_SECRET_KEY: str = "dev_placeholder_secret_key_do_not_use_in_production_1234567890"

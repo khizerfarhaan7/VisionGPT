@@ -3,6 +3,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { importAnalyzeResource, ImportAnalyzeResponse } from "@/services/importApi";
 import { queryRAGChat, ChatSource } from "@/services/chatApi";
+import BackgroundJobsPanel from "@/components/BackgroundJobsPanel";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   UploadCloud,
@@ -1373,6 +1374,13 @@ export default function WorkspacePage() {
           Central hub to upload and preview multi-modal files before applying vision, document reading, voice transcription, or analysis.
         </p>
       </motion.div>
+
+      {/* Real-time Background Processing Jobs Panel */}
+      <BackgroundJobsPanel
+        onJobCompleted={(job) => {
+          showToast(`Async task '${job.metadata?.filename || job.job_type}' completed.`);
+        }}
+      />
 
       {/* Workspace Tabs */}
       <div className="flex border-b border-slate-200 dark:border-zinc-800/80 gap-6">

@@ -21,7 +21,16 @@ VisionGPT is under active engineering and continuously evolving with new AI feat
 | :--- | :--- |
 | **🟢 Stable (Completed)** | • **Multimodal Vision Reasoning** (Google Gemini API)<br>• **PDF Intelligent RAG** (PyMuPDF + BGE Embeddings + FAISS + Ollama)<br>• **Audio Speech-to-Text & RAG** (Faster-Whisper INT8 + Chunking + FAISS)<br>• **Video Intelligence & RAG** (FFmpeg Audio Extraction + Whisper STT + FAISS)<br>• **Web Search & Direct Import** (DuckDuckGo + YouTube Video Filtering + PDF Auto-indexing)<br>• **Contextual Query Rewriting** (Pronoun resolution & Standalone query synthesis) |
 | **🟡 In Progress** | • Cross-Document Knowledge Graph Merging<br>• Visual Bounding-Box & Object Grounding Overlay |
-| **🔵 Planned Roadmap** | • PostgreSQL Session State & Chat History Persistence<br>• GPU Acceleration Auto-Scaling Worker Queues |
+| **🔵 Planned Roadmap** | • Cross-Document Knowledge Graph Merging<br>• Visual Bounding-Box & Object Grounding Overlay |
+
+---
+
+## 📚 Developer & API Documentation
+
+For detailed developer integration guides, OpenAPI endpoint documentation, asynchronous job queue specifications, request correlation (`X-Request-ID`), error schema contracts, and local-vs-cloud RAG configuration, please refer to:
+
+* **[Developer & API Integration Guide](file:///z:/MAJOR%20PROJECT/docs/API.md)** (`docs/API.md`)
+* **[Interactive OpenAPI Swagger UI](http://localhost:8000/docs)** (`http://localhost:8000/docs`)
 
 ---
 

@@ -24,6 +24,14 @@ def parse_cors_origins(v: Union[str, List[str]]) -> List[str]:
     return []
 
 
+def parse_file_extensions(v: Union[str, List[str]]) -> List[str]:
+    if isinstance(v, str):
+        return [ext.strip().lower() if ext.strip().startswith(".") else f".{ext.strip().lower()}" for ext in v.split(",") if ext.strip()]
+    elif isinstance(v, list):
+        return [str(ext).strip().lower() if str(ext).strip().startswith(".") else f".{str(ext).strip().lower()}" for ext in v if str(ext).strip()]
+    return [".pdf", ".txt", ".md", ".mp3", ".wav", ".m4a", ".mp4", ".mov", ".avi", ".webm", ".jpg", ".jpeg", ".png", ".webp"]
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=(".env", "../.env"), env_file_encoding="utf-8", case_sensitive=True, extra="ignore"
@@ -32,8 +40,10 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "VisionGPT"
     API_V1_STR: str = "/api/v1"
     
-    # Environment
+    # Environment & Debug
     ENVIRONMENT: str = "development"
+    DEBUG: bool = False
+    LOG_LEVEL: str = "INFO"
 
     # Database
     POSTGRES_SERVER: str = "localhost"
@@ -47,7 +57,6 @@ class Settings(BaseSettings):
     @property
     def async_database_url(self) -> str:
         if self.DATABASE_URL:
-            # Replace prefix if it's sync postgresql
             if self.DATABASE_URL.startswith("postgresql://"):
                 return self.DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
             return self.DATABASE_URL
@@ -71,8 +80,12 @@ class Settings(BaseSettings):
         Union[List[str], str], BeforeValidator(parse_cors_origins)
     ] = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
-    # Storage
+    # Storage & Upload Limits
     UPLOAD_DIR: str = "uploads"
+    MAX_UPLOAD_SIZE_MB: int = 100
+    ALLOWED_FILE_EXTENSIONS: Annotated[
+        Union[List[str], str], BeforeValidator(parse_file_extensions)
+    ] = [".pdf", ".txt", ".md", ".mp3", ".wav", ".m4a", ".mp4", ".mov", ".avi", ".webm", ".jpg", ".jpeg", ".png", ".webp"]
 
     # Resource Profile ("local", "high_quality", "custom")
     VISIONGPT_PROFILE: str = "local"
@@ -112,12 +125,39 @@ class Settings(BaseSettings):
     VIDEO_WINDOW_SIZE: float = 15.0
 
     def model_post_init(self, __context: Any) -> None:
+        # Validate ENVIRONMENT
+        env = self.ENVIRONMENT.lower().strip()
+        if env not in ("development", "production", "testing"):
+            raise ValueError(f"Invalid ENVIRONMENT '{self.ENVIRONMENT}'. Must be 'development', 'production', or 'testing'.")
+
+        if env == "production":
+            self.DEBUG = False
+            # Enforce CORS configuration in production
+            if not self.BACKEND_CORS_ORIGINS:
+                raise ValueError("BACKEND_CORS_ORIGINS must be explicitly specified in production environment.")
+
+        # Validate RAG_PROVIDER
+        provider = self.RAG_PROVIDER.lower().strip()
+        if provider not in ("local", "cloud", "auto"):
+            raise ValueError(f"Invalid RAG_PROVIDER '{self.RAG_PROVIDER}'. Must be 'local', 'cloud', or 'auto'.")
+
+        # Validate MAX_CONCURRENT_JOBS & MAX_UPLOAD_SIZE_MB
+        if self.MAX_CONCURRENT_JOBS < 1:
+            raise ValueError(f"Invalid MAX_CONCURRENT_JOBS '{self.MAX_CONCURRENT_JOBS}'. Must be >= 1.")
+        if self.MAX_UPLOAD_SIZE_MB < 1:
+            raise ValueError(f"Invalid MAX_UPLOAD_SIZE_MB '{self.MAX_UPLOAD_SIZE_MB}'. Must be >= 1.")
+
+        # Validate LOG_LEVEL
+        log_lvl = self.LOG_LEVEL.upper().strip()
+        if log_lvl not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+            raise ValueError(f"Invalid LOG_LEVEL '{self.LOG_LEVEL}'. Must be DEBUG, INFO, WARNING, ERROR, or CRITICAL.")
+
+        # Validate VISIONGPT_PROFILE & apply profile defaults
         profile = self.VISIONGPT_PROFILE.lower().strip()
         if profile not in ("local", "high_quality", "custom"):
             raise ValueError(f"Invalid VISIONGPT_PROFILE '{self.VISIONGPT_PROFILE}'. Must be 'local', 'high_quality', or 'custom'.")
 
         if profile == "high_quality":
-            # Apply high_quality defaults where defaults were kept
             if self.OLLAMA_MODEL == "qwen2.5:3b":
                 self.OLLAMA_MODEL = "qwen2.5:14b"
             if self.EMBEDDING_MODEL == "BAAI/bge-small-en-v1.5":
@@ -136,6 +176,19 @@ class Settings(BaseSettings):
                 self.VIDEO_WINDOW_SIZE = 5.0
             if self.GEMINI_MODEL == "gemini-2.5-flash":
                 self.GEMINI_MODEL = "gemini-2.5-pro"
+
+    def __repr__(self) -> str:
+        """
+        Custom repr representation preventing secret leaks in logs.
+        """
+        return (
+            f"<Settings env='{self.ENVIRONMENT}' profile='{self.VISIONGPT_PROFILE}' "
+            f"provider='{self.RAG_PROVIDER}' ollama='{self.OLLAMA_MODEL}' "
+            f"gemini_key_set={bool(self.GEMINI_API_KEY)}>"
+        )
+
+    def __str__(self) -> str:
+        return self.__repr__()
 
 
 settings = Settings()

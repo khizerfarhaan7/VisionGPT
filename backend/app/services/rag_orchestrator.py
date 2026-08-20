@@ -250,3 +250,47 @@ class RagOrchestrator:
             top_k_per_source=top_k_per_source,
             top_k_total=top_k_total
         )
+
+    @classmethod
+    async def answer_multimodal_query(
+        cls,
+        question: str,
+        session_id: Optional[Union[str, Any]] = None,
+        source_filters: Optional[List[str]] = None,
+        vector_store_dirs: Optional[List[Union[str, Path]]] = None,
+        mode: Optional[str] = None,
+        history: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
+        """
+        Full Multimodal RAG Grounded Answer pipeline.
+        Retrieves evidence across session modalities, builds verifiable citations,
+        generates grounded answer with confidence scoring, and enforces privacy rules.
+        """
+        from app.services.evidence_citation_service import EvidenceCitationService
+        from app.services.grounded_answer_service import GroundedAnswerService
+
+        requested_mode = (mode or getattr(settings, "RAG_PROVIDER", "local")).lower().strip()
+        resolved_provider = cls._resolve_provider(
+            mode=requested_mode,
+            vector_store_dir=vector_store_dirs[0] if vector_store_dirs else None,
+            vector_store_id=str(session_id) if session_id else None
+        )
+
+        retrieval_res = await cls.retrieve_multimodal_evidence(
+            question=question,
+            session_id=session_id,
+            source_filters=source_filters,
+            vector_store_dirs=vector_store_dirs
+        )
+
+        evidence = retrieval_res.get("evidence", [])
+        citations = EvidenceCitationService.build_citations(evidence)
+
+        return await GroundedAnswerService.generate_grounded_answer(
+            question=question,
+            evidence=evidence,
+            citations=citations,
+            mode=resolved_provider,
+            session_id=session_id,
+            history=history
+        )
